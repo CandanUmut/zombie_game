@@ -44,8 +44,9 @@
       position:absolute;
       left:0; right:0; top:0;
       display:flex; align-items:center; justify-content:space-between;
+      flex-wrap:wrap;
       gap:10px;
-      padding:10px 10px calc(10px + env(safe-area-inset-top));
+      padding:8px 10px calc(8px + env(safe-area-inset-top));
       background: linear-gradient(to bottom, rgba(10,12,18,.92), rgba(10,12,18,.55), transparent);
       pointer-events:none;
       z-index:10;
@@ -65,7 +66,7 @@
       padding:8px 10px;
       box-shadow: var(--shadow);
       display:flex; align-items:center; gap:10px;
-      min-height:38px;
+      min-height:36px;
       backdrop-filter: blur(6px);
     }
     .stat{
@@ -176,11 +177,6 @@
     .waveFill{position:absolute; left:0; top:0; height:100%; width:0%; background: linear-gradient(90deg, rgba(139,92,246,.95), rgba(94,234,212,.9)); box-shadow: 0 0 14px rgba(94,234,212,.45); border-right:1px solid rgba(255,255,255,.35);}
     .tag{font-size:11px; color:var(--muted); font-weight:800; letter-spacing:.5px; text-transform:uppercase;}
     .pauseBtn{padding:9px 10px; border-radius:12px; min-width:46px;}
-    .comboHud{pointer-events:none; display:flex; align-items:center; gap:10px; min-width:150px;}
-    .comboHud .v{font-size:20px; letter-spacing:0.3px;}
-    .comboBar{position:relative; flex:1; height:10px; border-radius:999px; background:rgba(255,255,255,.08); border:1px solid var(--line); overflow:hidden;}
-    .comboFill{position:absolute; inset:0; width:0%; background: linear-gradient(90deg, rgba(168,85,247,.9), rgba(94,234,212,.8)); box-shadow: 0 0 12px rgba(168,85,247,.4);}
-    .comboHud.pop{animation: comboPop 0.16s ease;}
     @keyframes comboPop{0%{transform:scale(1);}50%{transform:scale(1.06);}100%{transform:scale(1);}}
 
     #bossBar{
@@ -331,8 +327,22 @@
     .settingRow label{color:var(--muted); font-weight:700;}
     .toggle{width:42px; height:22px; border-radius:999px; background:rgba(255,255,255,.16); border:1px solid var(--line); position:relative; cursor:pointer;}
     .toggle .dot{position:absolute; width:18px; height:18px; border-radius:50%; background:#fff; top:1px; left:1px; transition: transform .18s ease;}
-    .toggle.on{background:rgba(139,92,246,.55); border-color:rgba(139,92,246,.6);} 
+    .toggle.on{background:rgba(139,92,246,.55); border-color:rgba(139,92,246,.6);}
     .toggle.on .dot{transform: translateX(20px);}
+
+    @media (max-width: 720px){
+      #hud{gap:6px; padding:6px 6px calc(6px + env(safe-area-inset-top)); align-items:flex-start;}
+      #hud .left{gap:6px; row-gap:6px;}
+      .pill{padding:6px 8px; gap:8px; min-height:32px;}
+      .stat{gap:1px;}
+      .stat .k{font-size:10px;}
+      .stat .v{font-size:12px;}
+      .coinBadge{padding:5px 10px; min-width:44px; font-size:13px;}
+      .hpBar{width:170px; height:14px;}
+      .hpText{font-size:11px;}
+      .waveProg{width:170px;}
+      .btn.small.iconBtn{width:40px; height:40px;}
+    }
   </style>
 </head>
 <body>
@@ -369,6 +379,16 @@
             <div class="k">Score</div>
             <div class="v" id="scoreLabel">0</div>
           </div>
+          <div class="divider"></div>
+          <div class="stat">
+            <div class="k">Combo</div>
+            <div class="v" id="comboValue">—</div>
+          </div>
+          <div class="divider"></div>
+          <div class="stat">
+            <div class="k">🔫 Ammo</div>
+            <div class="v" id="ammoLabel">0/0</div>
+          </div>
         </div>
 
         <div class="pill">
@@ -382,17 +402,6 @@
             </div>
           </div>
         </div>
-
-        <div class="pill comboHud" id="comboHud">
-          <div class="stat">
-            <div class="k">Combo</div>
-            <div class="v" id="comboValue">—</div>
-          </div>
-          <div class="comboBar" aria-label="Combo timer">
-            <div class="comboFill" id="comboFill"></div>
-          </div>
-        </div>
-
         <div class="pill">
           <div class="stat">
             <div class="k">Tap Dmg</div>
@@ -665,12 +674,11 @@
     const coinLabel = document.getElementById("coinLabel");
     const waveLabel = document.getElementById("waveLabel");
     const scoreLabel = document.getElementById("scoreLabel");
+    const comboValue = document.getElementById("comboValue");
+    const ammoLabel = document.getElementById("ammoLabel");
     const dmgLabel = document.getElementById("dmgLabel");
     const rateLabel = document.getElementById("rateLabel");
     const turretLabel = document.getElementById("turretLabel");
-    const comboHud = document.getElementById("comboHud");
-    const comboValue = document.getElementById("comboValue");
-    const comboFill = document.getElementById("comboFill");
     const waveFillEl = document.getElementById("waveFill");
     const waveProgressLabel = document.getElementById("waveProgressLabel");
     const bossBar = document.getElementById("bossBar");
@@ -1036,6 +1044,7 @@
       invulnUntil: 0,
       paused: false,
       reduceMotion: !!Save.settings.reduceMotionOn,
+      lastAmmoWarnAt: 0,
     };
 
     const Player = {
@@ -1045,6 +1054,8 @@
       score: 0,
       kills: 0,
       misses: 0,
+      ammo: 0,
+      ammoMax: 0,
 
       tapDamage: 1,
       tapCooldownMs: 300,
@@ -1240,7 +1251,7 @@
       State.dpr = dpr;
 
       const hudRect = hud.getBoundingClientRect();
-      State.playTop = (hudRect?.height || 0) + 8;
+      State.playTop = (hudRect?.bottom || (hudRect?.height || 0)) + 6;
       bossBar.style.top = `${State.playTop + 6}px`;
 
       // Size canvas backing store
@@ -1339,10 +1350,20 @@
           pointerState.set(pointerId, ps);
         }
         if (t - ps.lastShotAt < Player.tapCooldownMs) return;
+      if (Player.ammo <= 0){
+        if (t - State.lastAmmoWarnAt > 650){
+          showToast("Out of ammo!");
+          State.lastAmmoWarnAt = t;
+        }
+        return;
+      }
 
       ps.lastShotAt = t;
       ps.x = x; ps.y = y;
       addReticle(x,y);
+
+      Player.ammo = Math.max(0, Player.ammo - 1);
+      updateHUD();
 
       // Find closest zombie within forgiving radius
       let hitIdx = -1;
@@ -1363,6 +1384,8 @@
 
       if (hitIdx === -1) {
         Player.misses++;
+        if (Combo.value > 0) showToast("Miss! Combo lost");
+        resetCombo(false);
         Sound.play("hit"); // subtle "pew" even on miss? feels responsive
         // small spark particles (cheaper than separate pool)
         spawnParticles(x,y,6,90);
@@ -1700,10 +1723,8 @@
 
     function updateComboUI(){
       const active = Combo.value > 0 && Combo.timer > 0;
-      const pct = active ? clamp(Combo.timer / COMBO_WINDOW, 0, 1) : 0;
-      comboHud.style.opacity = active ? 1 : 0.45;
       comboValue.textContent = active ? `x${Combo.value}` : "—";
-      comboFill.style.width = `${pct * 100}%`;
+      comboValue.style.opacity = active ? 1 : 0.6;
     }
 
     function addCombo(x=State.w-40, y=60){
@@ -1711,10 +1732,7 @@
       else Combo.value = 1;
       Combo.value = Math.min(COMBO_MAX, Combo.value);
       Combo.timer = COMBO_WINDOW;
-      comboHud.classList.remove("pop");
-      void comboHud.offsetWidth;
-      comboHud.classList.add("pop");
-      addFloatingText(x, y, `COMBO x${Combo.value}`, "#a855f7", 0.8, -12);
+      addFloatingText(x, y, `x${Combo.value}`, "#a855f7", 0.8, -14);
       updateComboUI();
       return Combo.value;
     }
@@ -1741,6 +1759,8 @@
       Player.score = 0;
       Player.kills = 0;
       Player.misses = 0;
+      Player.ammo = 0;
+      Player.ammoMax = 0;
       Player.turretLastShotAt = -1e9;
       Player.turretHeat = 0;
       Player.coins = Save.coinsBank;
@@ -1857,6 +1877,9 @@
       if (Wave.mood === "MUTATION") toSpawn = Math.floor(toSpawn * 1.10);
       Wave.toSpawn = toSpawn;
       Wave.spawned = 0;
+
+      Player.ammoMax = Math.max(1, Wave.toSpawn * 2);
+      Player.ammo = Player.ammoMax;
 
       // Faster spawn at higher waves
       Wave.spawnEveryMs = Wave.isBossWave ? 900 : clamp(620 - w * 30, 140, 620);
@@ -2164,6 +2187,9 @@
       coinLabel.textContent = fmt(Player.coins);
       waveLabel.textContent = fmt(Wave.num);
       scoreLabel.textContent = fmt(Player.score);
+      comboValue.textContent = Combo.value > 0 && Combo.timer > 0 ? `x${Combo.value}` : "—";
+      comboValue.style.opacity = Combo.value > 0 && Combo.timer > 0 ? 1 : 0.6;
+      ammoLabel.textContent = `${Math.max(0, Math.floor(Player.ammo))}/${Math.max(0, Math.floor(Player.ammoMax))}`;
       const soundOn = Sound.getEnabled();
       soundBtn.classList.toggle("toggleOn", soundOn);
       soundBtn.textContent = soundOn ? "🔊" : "🔇";
