@@ -762,7 +762,9 @@
     const nowMs = () => performance.now();
     const fmt = (n) => Math.floor(n).toString();
     const triWave = (t) => 2/Math.PI * Math.asin(Math.sin(t));
-    const MAX_Z = 75;
+    const MAX_Z = 90;
+    const AUTO_CHIP_BOSS = 1;
+    const AUTO_CHIP_ELITE = 1;
 
     function showToast(msg) {
       toastEl.textContent = msg;
@@ -1041,6 +1043,7 @@
       autoLevel: 0,
       autoCooldownMs: 1400,
       autoLastShotAt: -1e9,
+      autoHeat: 0,
 
       shieldLevel: 0,
       shieldReady: false,
@@ -1050,8 +1053,16 @@
       Player.tapDamage = 1 + Player.dmgLevel;
       const base = 320;
       Player.tapCooldownMs = clamp(base * Math.pow(0.90, Player.rateLevel), 80, 320);
-      Player.turretCooldownMs = clamp(900 * Math.pow(0.92, Math.max(0, Player.turretLevel-1)), 240, 900);
-      Player.autoCooldownMs = clamp(1400 * Math.pow(0.82, Math.max(0, Player.autoLevel-1)), 420, 1400);
+      Player.turretCooldownMs = clamp(1200 * Math.pow(0.92, Math.max(0, Player.turretLevel-1)), 420, 1200);
+      if (Player.autoLevel <= 0) {
+        Player.autoCooldownMs = Infinity;
+      } else if (Player.autoLevel === 1) {
+        Player.autoCooldownMs = 1500;
+      } else if (Player.autoLevel === 2) {
+        Player.autoCooldownMs = 1200;
+      } else {
+        Player.autoCooldownMs = 950;
+      }
     }
 
     function applySaveToPlayer(){
@@ -1078,7 +1089,7 @@
       active: false,
       isBossWave: false,
       bossSpawned: false,
-      mood: "balanced",
+      mood: "NORMAL",
     };
 
     function updateBestLabels(){
@@ -1251,6 +1262,7 @@
       let hitSomething = false;
       for (let i=0; i<zombies.length; i++){
         const z = zombies[i];
+        if (z.isCloaked) continue;
         const dx = z.x - x;
         const dy = z.y - y;
         if (dx*dx + dy*dy > radius*radius) continue;
@@ -1289,6 +1301,8 @@
     function applyDamageToZombie(index, dmg, { source="tap", hitSound=true, spawnFx=true, allowExplosion=true } = {}){
       const z = zombies[index];
       if (!z) return false;
+      if (z.isCloaked) return false;
+      if (z.invulnTimer && z.invulnTimer > 0) return false;
       z.hp -= dmg;
       z.hitT = 0.12;
       if (spawnFx) {
@@ -1323,6 +1337,7 @@
       let bestD2 = 1e18;
       for (let i=0;i<zombies.length;i++){
         const z = zombies[i];
+        if (z.isCloaked) continue;
         // forgiving hit radius
         const rr = z.r * 1.25;
         const dx = x - z.x;
@@ -1360,6 +1375,7 @@
           for (let i=0;i<zombies.length;i++){
             const cand = zombies[i];
             if (targeted.has(cand)) continue;
+            if (cand.isCloaked) continue;
             const dx = cand.x - z.x;
             const dy = cand.y - z.y;
             const d2 = dx*dx + dy*dy;
@@ -1692,19 +1708,11 @@
     }
 
     function pickWaveMood(waveNum){
-      // Lightweight "director" to vary wave flavor
-      const weights = [
-        { key: "balanced", w: 0.40 },
-        { key: "swarm",    w: 0.24 + Math.sin(waveNum * 0.22) * 0.03 },
-        { key: "runner",   w: 0.20 + clamp(waveNum * 0.01, 0, 0.18) },
-        { key: "wiggle",   w: 0.16 + clamp(waveNum * 0.008, 0, 0.16) },
-      ];
-      const total = weights.reduce((s,a) => s + a.w, 0);
-      let r = Math.random() * total;
-      for (const w of weights){
-        r -= w.w; if (r <= 0) return w.key;
-      }
-      return "balanced";
+      const roll = Math.random();
+      if (roll < 0.20) return "SWARM";
+      if (roll < 0.35) return "RUNNERS";
+      if (roll < 0.50) return "MUTATION";
+      return "NORMAL";
     }
 
     // ---------- Game flow
@@ -1717,6 +1725,7 @@
       Player.misses = 0;
       Player.turretLastShotAt = -1e9;
       Player.autoLastShotAt = -1e9;
+      Player.autoHeat = 0;
       Player.coins = Save.coinsBank;
       Player.shieldReady = Player.shieldLevel > 0;
       recalcFromLevels();
@@ -1780,7 +1789,11 @@
       Wave.bossSpawned = false;
       Wave.mood = pickWaveMood(Wave.num);
       const w = Wave.num;
-      Wave.toSpawn = Wave.isBossWave ? 1 : Math.floor(14 + w * 5.2 + Math.pow(w, 1.15) * 1.2);
+      let toSpawn = Wave.isBossWave ? 1 : Math.floor(18 + w * 6.0 + Math.pow(w, 1.12) * 1.4);
+      if (Wave.mood === "SWARM") toSpawn = Math.floor(toSpawn * 1.45);
+      if (Wave.mood === "RUNNERS") toSpawn = Math.floor(toSpawn * 1.15);
+      if (Wave.mood === "MUTATION") toSpawn = Math.floor(toSpawn * 1.10);
+      Wave.toSpawn = toSpawn;
       Wave.spawnEveryMs = Wave.isBossWave ? 900 : clamp(620 - w * 30, 140, 620);
       Wave.nextSpawnAt = nowMs() + 450;
       if (Player.shieldLevel > 0) Player.shieldReady = true;
@@ -1819,7 +1832,11 @@
       Wave.mood = pickWaveMood(Wave.num);
 
       const w = Wave.num;
-      Wave.toSpawn = Wave.isBossWave ? 1 : Math.floor(14 + w * 5.2 + Math.pow(w, 1.15) * 1.2);
+      let toSpawn = Wave.isBossWave ? 1 : Math.floor(18 + w * 6.0 + Math.pow(w, 1.12) * 1.4);
+      if (Wave.mood === "SWARM") toSpawn = Math.floor(toSpawn * 1.45);
+      if (Wave.mood === "RUNNERS") toSpawn = Math.floor(toSpawn * 1.15);
+      if (Wave.mood === "MUTATION") toSpawn = Math.floor(toSpawn * 1.10);
+      Wave.toSpawn = toSpawn;
       Wave.spawned = 0;
 
       // Faster spawn at higher waves
@@ -1908,9 +1925,8 @@
       let runnerW = baseRunner;
       let normalW = 1 - baseRunner;
       // nudge by mood
-      if (Wave.mood === "runner") runnerW += 0.25;
-      if (Wave.mood === "swarm") normalW += 0.18;
-      if (Wave.mood === "wiggle") { runnerW += 0.08; normalW += 0.08; }
+      if (Wave.mood === "RUNNERS") runnerW += 0.30;
+      if (Wave.mood === "SWARM") normalW += 0.22;
       const total = runnerW + normalW;
       const r = Math.random() * total;
       return (r < runnerW) ? "runner" : "normal";
@@ -1938,7 +1954,7 @@
 
       const base = ZOMBIE_TYPES[typeKey];
 
-      const speedScale = 1 + Wave.num * 0.040;  // slightly faster each wave
+      const speedScale = 1 + Wave.num * 0.060;  // slightly faster each wave
       const speedJitter = rand(0.9, 1.08);
 
       let maxHp = base.hp;
@@ -1949,10 +1965,11 @@
       let sprinter = false;
       let sprintMult = 1;
       if (typeKey === "runner" && Wave.num > 6) {
-        const sprinterChance = clamp(0.10 + Wave.num * 0.01, 0.10, 0.18);
+        const sprinterChance = clamp(0.10 + Wave.num * 0.012, 0.10, 0.22);
         if (Math.random() < sprinterChance) {
           sprinter = true;
-          sprintMult = rand(1.35, 1.65);
+          const high = clamp(1.5 + Wave.num * 0.015, 1.5, 2.0);
+          sprintMult = rand(1.35, high);
         }
       }
 
@@ -1961,12 +1978,13 @@
       if (maxHp >= 3) vy *= 0.78;
 
       // Horizontal drift
-      const wiggleChance = clamp(0.20 + Wave.num * 0.008, 0.20, 0.40);
+      const wiggleChance = clamp(0.22 + Wave.num * 0.010, 0.22, 0.48);
       const shouldWiggle = Math.random() < wiggleChance;
-      const wiggleAmp = shouldWiggle ? rand(10, (rank === "elite" ? 55 : 40)) * (sprinter ? 0.6 : 1) : 0;
-      const wiggleFreq = shouldWiggle ? rand(0.8, 2.2) : 0;
+      let wiggleAmp = shouldWiggle ? rand(15, 80) * (1 + Wave.num * 0.02) : 0;
+      wiggleAmp = clamp(wiggleAmp * (sprinter ? 0.6 : 1), 15, 120);
+      const wiggleFreq = shouldWiggle ? rand(1.0, 3.2) : 0;
       const wigglePhase = rand(0, Math.PI*2);
-      const wiggleMode = shouldWiggle && Math.random() < (Wave.mood === "wiggle" ? 0.45 : 0.25) ? "tri" : "sin";
+      const wiggleMode = shouldWiggle && Math.random() < (Wave.num > 8 ? 0.45 : 0.28) ? "tri" : "sin";
 
       const baseCoin = randi(base.coinMin, base.coinMax);
       const coinInflate = Math.floor(Wave.num * 0.08);
@@ -2001,10 +2019,42 @@
         step: rand(0, Math.PI*2),
         hitT: 0,
 
+        mutation: "none",
+        isCloaked: false,
+        cloakTimer: 0,
+        nextCloak: 0,
+        dashTime: 0,
+        nextDash: 0,
+        dashMult: 1,
+        invulnTimer: 0,
+        blinkFlash: 0,
+
         // sprite frame timer
         frame: 0,
         frameT: 0,
       };
+      // mutation roll (non-boss)
+      if (!Wave.isBossWave) {
+        let mutChance = clamp(0.02 + Wave.num * 0.0025, 0.02, 0.10);
+        if (Wave.mood === "MUTATION") mutChance = Math.min(0.18, 0.10 + mutChance);
+        if (Math.random() < mutChance) {
+          const roll = Math.random();
+          if (roll < 0.34) z.mutation = "blink"; else if (roll < 0.67) z.mutation = "cloak"; else z.mutation = "dash";
+          if (z.mutation === "blink") {
+            z.nextBlink = rand(1.2, 2.0);
+            z.blinkFlash = 0.35;
+          }
+          if (z.mutation === "cloak") {
+            z.nextCloak = rand(1.8, 2.6);
+            z.cloakTimer = 0;
+          }
+          if (z.mutation === "dash") {
+            z.nextDash = rand(1.6, 2.4);
+            z.dashTime = 0;
+          }
+        }
+      }
+
       z.hp = z.maxHp;
       zombies.push(z);
     }
@@ -2037,6 +2087,8 @@
         wigglePhase: rand(0, Math.PI*2),
         frame: 0,
         frameT: 0,
+        mutation: "none",
+        isCloaked: false,
       };
       zombies.push(z);
     }
@@ -2051,7 +2103,9 @@
     function turretTryShoot(){
       if (Player.turretLevel <= 0) return;
       const t = nowMs();
-      if (t - Player.turretLastShotAt < Player.turretCooldownMs) return;
+      const heatMult = 1 + Player.autoHeat * 1.8;
+      const cd = Player.turretCooldownMs * heatMult;
+      if (t - Player.turretLastShotAt < cd) return;
       if (zombies.length === 0) return;
 
       // Nearest zombie (simple O(n) is fine for ~60)
@@ -2059,23 +2113,24 @@
       const ty = State.h - 18;
 
       let best = -1;
+      let bestY = -1;
       let bestD2 = 1e18;
       for (let i=0;i<zombies.length;i++){
         const z = zombies[i];
+        if (z.isCloaked) continue;
         const dx = z.x - tx;
         const dy = z.y - ty;
         const d2 = dx*dx + dy*dy;
-        if (d2 < bestD2){
-          bestD2 = d2;
-          best = i;
-        }
+        if (z.y > bestY || (Math.abs(z.y - bestY) < 6 && d2 < bestD2)) { bestY = z.y; bestD2 = d2; best = i; }
       }
       if (best === -1) return;
 
       Player.turretLastShotAt = t;
+      Player.autoHeat = Math.min(1, Player.autoHeat + 0.06);
 
       const z = zombies[best];
-      const dmg = turretDamage();
+      let dmg = turretDamage();
+      if (z.isBoss) dmg = AUTO_CHIP_BOSS; else if (z.elite) dmg = Math.min(dmg, AUTO_CHIP_ELITE);
 
       spawnShot(tx, ty, z.x, z.y, 0.09);
       applyDamageToZombie(best, dmg, { source:"turret" });
@@ -2085,25 +2140,32 @@
     function autoTryShoot(){
       if (Player.autoLevel <= 0) return;
       const t = nowMs();
-      if (t - Player.autoLastShotAt < Player.autoCooldownMs) return;
+      const heatMult = 1 + Player.autoHeat * 1.8;
+      const cd = Player.autoCooldownMs * heatMult;
+      if (t - Player.autoLastShotAt < cd) return;
       if (zombies.length === 0) return;
 
       let best = -1;
+      let bestY = -1;
       let bestD2 = 1e18;
       const ox = State.w * 0.6;
       const oy = State.h - 12;
       for (let i=0;i<zombies.length;i++){
         const z = zombies[i];
+        if (z.isCloaked) continue;
         const dx = z.x - ox;
         const dy = z.y - oy;
         const d2 = dx*dx + dy*dy;
-        if (d2 < bestD2){ bestD2 = d2; best = i; }
+        if (z.y > bestY || (Math.abs(z.y - bestY) < 6 && d2 < bestD2)) { bestY = z.y; bestD2 = d2; best = i; }
       }
       if (best === -1) return;
       Player.autoLastShotAt = t;
+      Player.autoHeat = Math.min(1, Player.autoHeat + 0.06);
       const z = zombies[best];
+      let dmg = Player.tapDamage * 0.85;
+      if (z.isBoss) dmg = AUTO_CHIP_BOSS; else if (z.elite) dmg = Math.min(dmg, AUTO_CHIP_ELITE);
       spawnShot(ox, oy, z.x, z.y, 0.08);
-      applyDamageToZombie(best, Player.tapDamage * 0.9, { source:"auto" });
+      applyDamageToZombie(best, dmg, { source:"auto" });
     }
 
     // ---------- HUD updates
@@ -2187,6 +2249,31 @@
       ctx.save();
       ctx.translate(x, y);
 
+      // mutation glows / trails
+      if (z.mutation === "dash" && z.dashTime > 0) {
+        ctx.globalAlpha = 0.45;
+        ctx.fillStyle = "rgba(248,113,113,0.65)";
+        ctx.beginPath();
+        ctx.moveTo(-r*0.8, r*0.35);
+        ctx.lineTo(-r*1.6, r*0.05);
+        ctx.lineTo(-r*0.8, -r*0.25);
+        ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
+      if (z.mutation === "blink") {
+        const glowA = 0.22 + (z.blinkFlash || 0) * 0.9;
+        ctx.globalAlpha = clamp(glowA, 0, 0.55);
+        ctx.fillStyle = "rgba(168,85,247,0.9)";
+        ctx.beginPath();
+        ctx.arc(0, 0, r*1.35, 0, Math.PI*2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
+      const baseAlpha = z.isCloaked ? 0.18 : 1;
+
       // shadow
       ctx.fillStyle = "rgba(0,0,0,.35)";
       ctx.beginPath();
@@ -2213,6 +2300,8 @@
         ctx.arc(r*0.62, -r*0.9, r*0.22, 0, Math.PI*2);
         ctx.fill();
       }
+
+      ctx.globalAlpha = baseAlpha;
 
       // legs swing
       const swing = Math.sin(z.step) * (isTank ? 0.22 : isRunner ? 0.55 : 0.38);
@@ -2263,7 +2352,7 @@
       ctx.stroke();
 
       // eyes + mouth
-      ctx.fillStyle = "rgba(0,0,0,.55)";
+      ctx.fillStyle = z.mutation === "dash" ? "rgba(248,113,113,.75)" : "rgba(0,0,0,.55)";
       ctx.beginPath();
       ctx.arc(-r*0.18, -r*0.78, r*0.08, 0, Math.PI*2);
       ctx.arc(r*0.18, -r*0.78, r*0.08, 0, Math.PI*2);
@@ -2274,6 +2363,16 @@
       ctx.beginPath();
       ctx.arc(0, -r*0.58, r*0.18, 0.1*Math.PI, 0.9*Math.PI);
       ctx.stroke();
+
+      if (z.isCloaked) {
+        ctx.globalAlpha = 0.5;
+        ctx.strokeStyle = "rgba(125,211,252,0.8)";
+        ctx.lineWidth = Math.max(1, r*0.05);
+        ctx.beginPath();
+        ctx.arc(0, 0, r*1.1, 0, Math.PI*2);
+        ctx.stroke();
+        ctx.globalAlpha = baseAlpha;
+      }
 
       // HP bar (only if damaged and multi-hit)
       if (z.maxHp > 1 && z.hp < z.maxHp) {
@@ -2317,6 +2416,28 @@
       const hitS = (z.hitT > 0) ? 1.08 : 1.0;
       ctx.scale(hitS, hitS);
 
+      if (z.mutation === "dash" && z.dashTime > 0) {
+        ctx.globalAlpha = 0.45;
+        ctx.fillStyle = "rgba(248,113,113,0.65)";
+        ctx.beginPath();
+        ctx.moveTo(-z.r*0.8, z.r*0.35);
+        ctx.lineTo(-z.r*1.6, z.r*0.05);
+        ctx.lineTo(-z.r*0.8, -z.r*0.25);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+      if (z.mutation === "blink") {
+        const glowA = 0.22 + (z.blinkFlash || 0) * 0.9;
+        ctx.globalAlpha = clamp(glowA, 0, 0.55);
+        ctx.fillStyle = "rgba(168,85,247,0.9)";
+        ctx.beginPath();
+        ctx.arc(0, 0, z.r*1.35, 0, Math.PI*2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
+      const baseAlpha = z.isCloaked ? 0.18 : 1;
+
       // shadow
       ctx.fillStyle = "rgba(0,0,0,.35)";
       ctx.beginPath();
@@ -2332,7 +2453,7 @@
       }
 
       // image
-      ctx.globalAlpha = 0.98;
+      ctx.globalAlpha = 0.98 * baseAlpha;
       ctx.drawImage(img, f*fw, 0, fw, fh, -size/2, -size/2, size, size);
 
       if (z.sprinter) {
@@ -2349,6 +2470,15 @@
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.arc(0, 0, z.r*1.2, 0, Math.PI*2);
+        ctx.stroke();
+      }
+
+      if (z.isCloaked) {
+        ctx.globalAlpha = 0.45;
+        ctx.strokeStyle = "rgba(125,211,252,0.8)";
+        ctx.lineWidth = Math.max(1, z.r*0.05);
+        ctx.beginPath();
+        ctx.arc(0, 0, z.r*1.1, 0, Math.PI*2);
         ctx.stroke();
       }
 
@@ -2376,6 +2506,15 @@
         ctx.fillRect(px, py, bw*t, bh);
         ctx.strokeStyle = "rgba(255,255,255,.12)";
         ctx.strokeRect(px, py, bw, bh);
+      }
+
+      if (z.mutation !== "none" && !z.isCloaked) {
+        ctx.globalAlpha = 0.82;
+        ctx.fillStyle = z.mutation === "blink" ? "#a855f7" : z.mutation === "dash" ? "#fb923c" : "#22d3ee";
+        ctx.font = "700 11px ui-sans-serif, system-ui";
+        ctx.textAlign = "center";
+        ctx.fillText("Mutant!", 0, -z.r*1.6);
+        ctx.globalAlpha = 1;
       }
 
       ctx.restore();
@@ -2433,6 +2572,11 @@
         if (Combo.timer <= 0) resetCombo();
       }
 
+      // automation heat decay
+      if (Player.autoHeat > 0) {
+        Player.autoHeat = Math.max(0, Player.autoHeat - dt * 0.10);
+      }
+
       if (State.mode !== "playing") { updateHUD(); return; }
       if (State.paused) return;
 
@@ -2458,10 +2602,14 @@
           } else {
             spawnZombie();
             Wave.spawned++;
-            const surgeReady = (Wave.spawned % 7 === 0) && Wave.spawned < Wave.toSpawn && zombies.length < MAX_Z;
-            if (surgeReady && Math.random() < 0.35) {
-              spawnZombie();
-              Wave.spawned++;
+            if (Wave.mood === "SWARM") {
+              let extra = 0;
+              const roll = Math.random();
+              if (roll < 0.12) extra = 2; else if (roll < 0.47) extra = 1;
+              for (let n=0; n<extra && Wave.spawned < Wave.toSpawn && zombies.length < MAX_Z; n++) {
+                spawnZombie();
+                Wave.spawned++;
+              }
             }
             Wave.nextSpawnAt = t + Wave.spawnEveryMs * rand(0.72, 1.10);
           }
@@ -2475,11 +2623,63 @@
       for (let i=zombies.length-1; i>=0; i--){
         const z = zombies[i];
         z.t += dt;
+        if (z.invulnTimer > 0) z.invulnTimer = Math.max(0, z.invulnTimer - dt);
+        if (z.blinkFlash > 0) z.blinkFlash = Math.max(0, z.blinkFlash - dt * 1.8);
 
         // bob + step
         const bobAmp = (z.type === "runner") ? 4.6 : (z.type === "tank") ? 2.9 : 3.6;
         z.step += dt * ((z.type === "runner") ? 10.0 : (z.type === "tank") ? 6.2 : 8.0);
         z.bob = Math.sin(z.t*8.2) * bobAmp;
+
+        // mutation behaviors
+        if (z.mutation === "blink") {
+          z.nextBlink = z.nextBlink ?? rand(1.2, 2.0);
+          z.nextBlink -= dt;
+          if (z.nextBlink <= 0) {
+            const shift = (Math.random() < 0.5 ? -1 : 1) * rand(40, 110);
+            const marginX = 18;
+            const newX = clamp(z.x + shift, marginX, State.w - marginX);
+            if (Math.abs(newX - z.x) > 2) {
+              addRing(newX, z.y, 14, 0.3);
+              spawnParticles(newX, z.y, 6, 140);
+            }
+            z.x = newX;
+            z.x0 = newX;
+            z.invulnTimer = Math.max(z.invulnTimer, 0.18);
+            z.blinkFlash = 0.25;
+            z.nextBlink = rand(1.2, 2.0);
+          }
+        } else if (z.mutation === "cloak") {
+          if (z.isCloaked) {
+            z.cloakTimer -= dt;
+            if (z.cloakTimer <= 0) {
+              z.isCloaked = false;
+              z.nextCloak = rand(1.8, 2.6);
+            }
+          } else {
+            z.nextCloak = (z.nextCloak ?? rand(1.8, 2.6)) - dt;
+            if (z.nextCloak <= 0) {
+              z.isCloaked = true;
+              z.cloakTimer = rand(0.6, 0.9);
+              z.invulnTimer = Math.max(z.invulnTimer, 0.05);
+            }
+          }
+        } else if (z.mutation === "dash") {
+          if (z.dashTime > 0) {
+            z.dashTime -= dt;
+            if (z.dashTime <= 0) {
+              z.dashMult = 1;
+              z.nextDash = rand(1.6, 2.4);
+            }
+          } else {
+            z.nextDash = (z.nextDash ?? rand(1.6, 2.4)) - dt;
+            if (z.nextDash <= 0) {
+              z.dashTime = rand(0.22, 0.27);
+              z.dashMult = rand(2.2, 2.8);
+              z.nextDash = rand(1.6, 2.4) + z.dashTime;
+            }
+          }
+        }
 
         if (!Number.isFinite(z.x0)) z.x0 = z.x;
         if (!z.isBoss) {
@@ -2496,7 +2696,8 @@
           z.x = clamp(z.x0 + osc * z.wiggleAmp, 22, State.w - 22);
         }
 
-        z.y += z.vy * dt;
+        const speedBoost = (z.mutation === "dash" && z.dashTime > 0) ? z.dashMult : 1;
+        z.y += z.vy * speedBoost * dt;
         if (z.y < State.playTop) z.y = State.playTop;
 
         if (z.hitT > 0) z.hitT = Math.max(0, z.hitT - dt);
