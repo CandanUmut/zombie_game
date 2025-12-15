@@ -52,9 +52,12 @@
     }
     #hud .left, #hud .right{
       display:flex; align-items:center; gap:10px;
-      pointer-events:auto;
+      pointer-events:none;
       flex-wrap:wrap;
     }
+    #hud .pill, #hud .stat, #hud .divider, #hud .hpBar, #hud .hpWrap, #hud .hpText{pointer-events:none;}
+    #hud .right{pointer-events:auto;}
+    #hud button{pointer-events:auto;}
     .pill{
       background: var(--panel);
       border:1px solid var(--line);
@@ -518,6 +521,7 @@
     // ---------- DOM
     const canvas = document.getElementById("gameCanvas");
     const ctx = canvas.getContext("2d", { alpha: true });
+    const hud = document.getElementById("hud");
 
     const hpLabel = document.getElementById("hpLabel");
     const hpFill  = document.getElementById("hpFill");
@@ -677,6 +681,7 @@
       zombieSheetOk: false,
       blood: null,
       bloodOk: false,
+      bloodAtlas: { cols:2, rows:2, cellW:0, cellH:0 },
     };
 
     function colorKeyToCanvas(img, tolerance=18){
@@ -711,7 +716,12 @@
       loadImage("assets/blood.png"),
     ]).then(([zs, bl]) => {
       if (zs.ok) { Assets.zombieSheet = colorKeyToCanvas(zs.img); Assets.zombieSheetOk = true; }
-      if (bl.ok) { Assets.blood = colorKeyToCanvas(bl.img); Assets.bloodOk = true; }
+      if (bl.ok) {
+        const c = colorKeyToCanvas(bl.img);
+        Assets.blood = c; Assets.bloodOk = true;
+        Assets.bloodAtlas.cellW = c.width / Assets.bloodAtlas.cols;
+        Assets.bloodAtlas.cellH = c.height / Assets.bloodAtlas.rows;
+      }
     });
 
     // ---------- Sound manager (WebAudio with unlock + optional file buffers)
@@ -721,6 +731,7 @@
       let ctxA = null;
       let master = null;
       const buffers = new Map();
+      const sfxGains = { hit:0.30, kill:0.55, hurt:0.45, wave:0.40, ui:0.30 };
 
       // Optional sound files
       const soundFiles = {
@@ -746,7 +757,7 @@
         try {
           ctxA = new (window.AudioContext || window.webkitAudioContext)();
           master = ctxA.createGain();
-          master.gain.value = 0.55;
+          master.gain.value = 0.30;
           master.connect(ctxA.destination);
           await ctxA.resume();
           unlocked = true;
@@ -773,8 +784,10 @@
         if (!buf) return false;
         const src = ctxA.createBufferSource();
         const g = ctxA.createGain();
-        g.gain.value = clamp(gain, 0, 2);
+        const mul = sfxGains[name] ?? 1;
+        g.gain.value = clamp(gain * mul, 0, 2);
         src.buffer = buf;
+        if (name === "hit" || name === "kill") src.playbackRate.value = rand(0.97, 1.03);
         src.connect(g);
         g.connect(master);
         src.start();
@@ -807,11 +820,11 @@
         const ok = playBuffer(name, 1);
         if (ok) return;
 
-        if (name === "hit")  beep({ f: 520, dur: 0.04, type:"square", gain:0.12, slide:-80 });
-        if (name === "kill") beep({ f: 220, dur: 0.08, type:"sawtooth", gain:0.16, slide: 240 });
-        if (name === "hurt") beep({ f: 120, dur: 0.10, type:"triangle", gain:0.20, slide:-30 });
-        if (name === "wave") beep({ f: 660, dur: 0.12, type:"square", gain:0.12, slide: 200 });
-        if (name === "ui")   beep({ f: 740, dur: 0.04, type:"square", gain:0.10, slide: 0 });
+        if (name === "hit")  beep({ f: 520, dur: 0.04, type:"square", gain:0.10, slide:-80 });
+        if (name === "kill") beep({ f: 220, dur: 0.08, type:"sawtooth", gain:0.13, slide: 240 });
+        if (name === "hurt") beep({ f: 120, dur: 0.10, type:"triangle", gain:0.17, slide:-30 });
+        if (name === "wave") beep({ f: 660, dur: 0.12, type:"square", gain:0.10, slide: 200 });
+        if (name === "ui")   beep({ f: 740, dur: 0.04, type:"square", gain:0.08, slide: 0 });
       }
 
       // Load persisted sound setting
@@ -826,6 +839,7 @@
     const State = {
       mode: "start", // start | playing | shop | gameover | paused
       w: 0, h: 0, dpr: 1,
+      playTop: 0,
       time: 0,
       lastT: nowMs(),
       shakeT: 0,
@@ -911,6 +925,7 @@
       x: new Float32Array(DECAL_MAX),
       y: new Float32Array(DECAL_MAX),
       rot: new Float32Array(DECAL_MAX),
+      cell: new Uint8Array(DECAL_MAX),
       life: new Float32Array(DECAL_MAX),
       max: new Float32Array(DECAL_MAX),
       a: new Float32Array(DECAL_MAX),
@@ -932,15 +947,15 @@
       idx: 0,
     };
 
-    // Shot tracers (turret)
-    const T_MAX = 24;
-    const Trace = {
-      x1: new Float32Array(T_MAX),
-      y1: new Float32Array(T_MAX),
-      x2: new Float32Array(T_MAX),
-      y2: new Float32Array(T_MAX),
-      life: new Float32Array(T_MAX),
-      max: new Float32Array(T_MAX),
+    // Shot tracers (tap + turret)
+    const SHOT_MAX = 80;
+    const Shots = {
+      x1: new Float32Array(SHOT_MAX),
+      y1: new Float32Array(SHOT_MAX),
+      x2: new Float32Array(SHOT_MAX),
+      y2: new Float32Array(SHOT_MAX),
+      life: new Float32Array(SHOT_MAX),
+      max: new Float32Array(SHOT_MAX),
       idx: 0,
     };
 
@@ -959,11 +974,13 @@
     const Ret = {x:new Float32Array(RET_MAX), y:new Float32Array(RET_MAX), life:new Float32Array(RET_MAX), max:new Float32Array(RET_MAX)};
     let retIdx=0;
 
-    function addTrace(x1,y1,x2,y2,ttl=0.08){
-      const i = Trace.idx;
-      Trace.x1[i]=x1; Trace.y1[i]=y1; Trace.x2[i]=x2; Trace.y2[i]=y2;
-      Trace.life[i]=ttl; Trace.max[i]=ttl;
-      Trace.idx = (Trace.idx+1) % T_MAX;
+    function spawnShot(x1,y1,x2,y2,ttl=0.08){
+      const i = Shots.idx;
+      Shots.x1[i]=x1; Shots.y1[i]=y1; Shots.x2[i]=x2; Shots.y2[i]=y2;
+      Shots.life[i]=ttl; Shots.max[i]=ttl;
+      Shots.idx = (Shots.idx+1) % SHOT_MAX;
+      addRing(x1,y1,8,0.14);
+      addRing(x2,y2,10,0.2);
     }
 
     function addFloatingText(x,y,text,color="#fff",life=0.9,vy=-22){
@@ -986,8 +1003,9 @@
 
     function addDecal(x,y){
       const i = decal.idx;
-      decal.x[i]=x; decal.y[i]=y;
-      decal.rot[i]=rand(-Math.PI, Math.PI);
+      decal.x[i]=x; decal.y[i]=clamp(y, State.playTop + 4, State.h - 6);
+      decal.rot[i]=rand(-0.25, 0.25);
+      decal.cell[i]=randi(0, 3);
       decal.max[i]=rand(3.0, 5.0);
       decal.life[i]=decal.max[i];
       decal.a[i]=rand(0.55, 0.9);
@@ -1017,6 +1035,9 @@
       const rect = canvas.getBoundingClientRect();
       const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
       State.dpr = dpr;
+
+      const hudRect = hud.getBoundingClientRect();
+      State.playTop = (hudRect?.height || 0) + 8;
 
       // Size canvas backing store
       const w = Math.max(320, Math.floor(rect.width));
@@ -1077,6 +1098,7 @@
 
       // Hit!
       const z = zombies[hitIdx];
+      spawnShot(State.w*0.5, State.h - 18, z.x, z.y);
       z.hp -= Player.tapDamage;
       z.hitT = 0.12;
       addRing(z.x, z.y, 12, 0.25);
@@ -1116,7 +1138,7 @@
       if (navigator.vibrate && Save.settings.vibrationOn) navigator.vibrate(12);
 
       if (Assets.bloodOk) {
-        addDecal(z.x, z.y);
+        addDecal(z.x, z.y + z.r*0.85);
       }
 
       // Remove zombie (swap-pop)
@@ -1356,7 +1378,7 @@
 
       // clear particle lifetimes (cheap)
       for (let i=0;i<P_MAX;i++) P.life[i] = 0;
-      for (let i=0;i<T_MAX;i++) Trace.life[i] = 0;
+      for (let i=0;i<SHOT_MAX;i++) Shots.life[i] = 0;
     }
 
     function startGame(){
@@ -1495,7 +1517,7 @@
 
       const margin = 26;
       const x = rand(margin, State.w - margin);
-      const y = rand(-40, -12);
+      const y = rand(State.playTop + 10, State.playTop + 50);
       const z = {
         type: typeKey,
         x, y,
@@ -1536,7 +1558,7 @@
 
       // Nearest zombie (simple O(n) is fine for ~60)
       const tx = State.w * 0.5;
-      const ty = State.h - 22;
+      const ty = State.h - 18;
 
       let best = -1;
       let bestD2 = 1e18;
@@ -1557,8 +1579,7 @@
       const z = zombies[best];
       const dmg = turretDamage();
 
-      // tracer
-      addTrace(tx, ty, z.x, z.y, 0.09);
+      spawnShot(tx, ty, z.x, z.y, 0.09);
 
       // impact
       z.hp -= dmg;
@@ -1874,6 +1895,7 @@
         z.bob = Math.sin(z.t*8.2) * bobAmp;
 
         z.y += z.vy * dt;
+        if (z.y < State.playTop) z.y = State.playTop;
 
         if (z.hitT > 0) z.hitT = Math.max(0, z.hitT - dt);
 
@@ -1929,10 +1951,10 @@
         decal.life[i] -= dt;
       }
 
-      // Traces
-      for (let i=0;i<T_MAX;i++){
-        if (Trace.life[i] <= 0) continue;
-        Trace.life[i] -= dt;
+      // Shots
+      for (let i=0;i<SHOT_MAX;i++){
+        if (Shots.life[i] <= 0) continue;
+        Shots.life[i] -= dt;
       }
 
       // Floating text
@@ -1987,12 +2009,16 @@
           const t = clamp(life / decal.max[i], 0, 1);
           const a = decal.a[i] * t;
           const size = lerp(44, 56, 1 - t);
+          const cell = decal.cell[i] || 0;
+          const atlas = Assets.bloodAtlas;
+          const sx = (cell % atlas.cols) * atlas.cellW;
+          const sy = Math.floor(cell / atlas.cols) * atlas.cellH;
 
           ctx.save();
           ctx.translate(decal.x[i], decal.y[i]);
           ctx.rotate(decal.rot[i]);
           ctx.globalAlpha = a;
-          ctx.drawImage(Assets.blood, -size/2, -size/2, size, size);
+          ctx.drawImage(Assets.blood, sx, sy, atlas.cellW, atlas.cellH, -size/2, -size/2, size, size);
           ctx.restore();
         }
       }
@@ -2012,17 +2038,48 @@
         }
       }
 
-      // Traces
-      for (let i=0;i<T_MAX;i++){
-        const life = Trace.life[i];
+      // Shots
+      for (let i=0;i<SHOT_MAX;i++){
+        const life = Shots.life[i];
         if (life <= 0) continue;
-        const t = clamp(life / Trace.max[i], 0, 1);
-        ctx.globalAlpha = t * 0.8;
-        ctx.strokeStyle = "rgba(139,92,246,.95)";
-        ctx.lineWidth = 2;
+        const tLife = clamp(life / Shots.max[i], 0, 1);
+        const t = 1 - tLife;
+        const x1 = Shots.x1[i], y1 = Shots.y1[i];
+        const x2 = Shots.x2[i], y2 = Shots.y2[i];
+        const px = lerp(x1, x2, t);
+        const py = lerp(y1, y2, t);
+
+        ctx.globalAlpha = tLife * 0.7;
+        ctx.strokeStyle = "rgba(139,92,246,.85)";
+        ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.moveTo(Trace.x1[i], Trace.y1[i]);
-        ctx.lineTo(Trace.x2[i], Trace.y2[i]);
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+
+        // moving projectile dot
+        ctx.globalAlpha = clamp(0.35 + (1 - tLife)*0.65, 0, 1);
+        ctx.fillStyle = "rgba(255,255,255,.95)";
+        ctx.beginPath();
+        ctx.arc(px, py, 2.6, 0, Math.PI*2);
+        ctx.fill();
+
+        // muzzle flash
+        const flash = Math.max(0, 0.5 - t*2.2);
+        if (flash > 0) {
+          ctx.globalAlpha = flash * 0.65;
+          ctx.fillStyle = "rgba(255,255,255,.9)";
+          ctx.beginPath();
+          ctx.arc(x1, y1, 6 + flash*6, 0, Math.PI*2);
+          ctx.fill();
+        }
+
+        // tiny impact shimmer
+        ctx.globalAlpha = Math.max(0, (1 - t) * 0.4);
+        ctx.strokeStyle = "rgba(255,255,255,.55)";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(x2, y2, 6 + (1-tLife)*4, 0, Math.PI*2);
         ctx.stroke();
       }
       ctx.globalAlpha = 1;
