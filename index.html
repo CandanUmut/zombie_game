@@ -133,6 +133,25 @@
     .tag{font-size:11px; color:var(--muted); font-weight:800; letter-spacing:.5px; text-transform:uppercase;}
     .pauseBtn{padding:9px 10px; border-radius:12px; min-width:46px;}
 
+    #bossBar{
+      position:absolute;
+      left:50%; top:62px;
+      transform: translateX(-50%);
+      display:flex; align-items:center; gap:10px;
+      padding:7px 12px;
+      background: rgba(18,22,32,.85);
+      border:1px solid var(--line);
+      border-radius:12px;
+      box-shadow: var(--shadow);
+      pointer-events:none;
+      z-index:9;
+    }
+    #bossBar.hidden{display:none;}
+    .bossLabel{font-size:12px; font-weight:900; color:#f87171; letter-spacing:1px;}
+    .bossHp{width:200px; height:12px; border-radius:10px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); overflow:hidden; position:relative;}
+    .bossHpFill{position:absolute; left:0; top:0; height:100%; width:100%; background: linear-gradient(90deg, rgba(248,113,113,.9), rgba(248,113,113,.55)); transform-origin:left center;}
+    .bossHpText{font-size:12px; color:var(--muted); font-weight:800;}
+
     /* Canvas */
     #gameCanvas{
       width:100%;
@@ -328,6 +347,12 @@
         <button class="btn small" id="soundBtn" title="Toggle sound">🔊 Sound</button>
         <button class="btn small" id="settingsBtn" title="Settings">⚙️</button>
       </div>
+    </div>
+
+    <div id="bossBar" class="hidden" aria-label="Boss health">
+      <div class="bossLabel">BOSS</div>
+      <div class="bossHp"><div class="bossHpFill" id="bossHpFill"></div></div>
+      <div class="bossHpText" id="bossHpText">0/0</div>
     </div>
 
     <div id="settingsPanel" class="hidden">
@@ -535,6 +560,9 @@
     const turretLabel = document.getElementById("turretLabel");
     const waveFillEl = document.getElementById("waveFill");
     const waveProgressLabel = document.getElementById("waveProgressLabel");
+    const bossBar = document.getElementById("bossBar");
+    const bossHpFill = document.getElementById("bossHpFill");
+    const bossHpText = document.getElementById("bossHpText");
 
     const soundBtn = document.getElementById("soundBtn");
     const pauseBtn = document.getElementById("pauseBtn");
@@ -863,7 +891,6 @@
 
       tapDamage: 1,
       tapCooldownMs: 300,
-      lastTapShotAt: -1e9,
 
       dmgLevel: 0,
       rateLevel: 0,
@@ -898,6 +925,8 @@
       nextSpawnAt: 0,
       clearedAt: 0,
       active: false,
+      isBossWave: false,
+      bossSpawned: false,
     };
 
     function updateBestLabels(){
@@ -911,9 +940,9 @@
 
     // ---------- Zombie types
     const ZOMBIE_TYPES = {
-      normal: { name:"Normal", speed: 52, hp: 5,  coin: 4,  passDmg: 8,  r: 18 },
-      runner: { name:"Runner", speed: 95, hp: 4,  coin: 5,  passDmg: 10, r: 16 },
-      tank:   { name:"Tank",   speed: 38, hp: 14, coin: 9,  passDmg: 18, r: 22 },
+      normal: { name:"Normal", speed: 52, hp: 1,  coin: 4,  passDmg: 8,  r: 18 },
+      runner: { name:"Runner", speed: 95, hp: 1,  coin: 5,  passDmg: 10, r: 16 },
+      tank:   { name:"Tank",   speed: 38, hp: 3,  coin: 12, passDmg: 18, r: 22 },
     };
 
     // ---------- Entity pools
@@ -1038,6 +1067,7 @@
 
       const hudRect = hud.getBoundingClientRect();
       State.playTop = (hudRect?.height || 0) + 8;
+      bossBar.style.top = `${State.playTop + 6}px`;
 
       // Size canvas backing store
       const w = Math.max(320, Math.floor(rect.width));
@@ -1053,8 +1083,7 @@
     window.addEventListener("resize", resize, { passive:true });
 
     // ---------- Input (pointer events, forgiving hit detection)
-    let pointerDown = false;
-    const pointerPos = {x:0,y:0};
+    const pointerState = new Map(); // pointerId -> { lastShotAt, x, y, active }
 
     function canvasPointFromEvent(e){
       const r = canvas.getBoundingClientRect();
@@ -1063,12 +1092,17 @@
       return { x, y };
     }
 
-    function tryShootAt(x,y){
+    function attemptShoot(pointerId, x, y){
       const t = nowMs();
-      // weapon cooldown
-      if (t - Player.lastTapShotAt < Player.tapCooldownMs) return;
+      let ps = pointerState.get(pointerId);
+      if (!ps) {
+        ps = { lastShotAt: -1e9, x, y, active: true };
+        pointerState.set(pointerId, ps);
+      }
+      if (t - ps.lastShotAt < Player.tapCooldownMs) return;
 
-      Player.lastTapShotAt = t;
+      ps.lastShotAt = t;
+      ps.x = x; ps.y = y;
       addReticle(x,y);
 
       // Find closest zombie within forgiving radius
@@ -1173,11 +1207,9 @@
     window.addEventListener("wheel", (e) => { if (State.mode === "playing") e.preventDefault(); }, { passive:false });
 
     canvas.addEventListener("pointerdown", (e) => {
-      pointerDown = true;
       canvas.setPointerCapture?.(e.pointerId);
 
       const p = canvasPointFromEvent(e);
-      pointerPos.x = p.x; pointerPos.y = p.y;
 
       // First interaction unlocks audio (iOS/Android requirement)
       Sound.unlock();
@@ -1188,15 +1220,22 @@
       }
       if (State.mode !== "playing") return;
 
-      tryShootAt(p.x, p.y);
+      if (!pointerState.has(e.pointerId)) {
+        pointerState.set(e.pointerId, { lastShotAt: -1e9, x: p.x, y: p.y, active: true });
+      } else {
+        const ps = pointerState.get(e.pointerId);
+        ps.x = p.x; ps.y = p.y; ps.active = true;
+      }
+      attemptShoot(e.pointerId, p.x, p.y);
     });
 
-    canvas.addEventListener("pointerup", () => { pointerDown = false; });
-    canvas.addEventListener("pointercancel", () => { pointerDown = false; });
+    canvas.addEventListener("pointerup", (e) => { pointerState.delete(e.pointerId); });
+    canvas.addEventListener("pointercancel", (e) => { pointerState.delete(e.pointerId); });
     canvas.addEventListener("pointermove", (e) => {
-      if (!pointerDown) return;
+      const ps = pointerState.get(e.pointerId);
+      if (!ps) return;
       const p = canvasPointFromEvent(e);
-      pointerPos.x = p.x; pointerPos.y = p.y;
+      ps.x = p.x; ps.y = p.y;
     });
 
     // ---------- UI buttons
@@ -1346,12 +1385,11 @@
     // ---------- Game flow
     function resetAll(){
       zombies.length = 0;
+      pointerState.clear();
       Player.hp = Player.maxHp;
       Player.score = 0;
       Player.kills = 0;
       Player.misses = 0;
-
-      Player.lastTapShotAt = -1e9;
       Player.turretLastShotAt = -1e9;
       Player.coins = Save.coinsBank;
       recalcFromLevels();
@@ -1360,6 +1398,7 @@
       State.hpSmooth = Player.hp;
       State.hpGhost = Player.hp;
       vignette.style.opacity = "0";
+      bossBar.classList.add("hidden");
 
       Wave.num = 0;
       Wave.active = false;
@@ -1368,6 +1407,8 @@
       Wave.spawnEveryMs = 650;
       Wave.nextSpawnAt = 0;
       Wave.clearedAt = 0;
+      Wave.isBossWave = false;
+      Wave.bossSpawned = false;
 
       State.shakeT = 0;
       State.shakeMag = 0;
@@ -1407,7 +1448,10 @@
       zombies.length = 0;
       Wave.spawned = 0;
       Wave.active = true;
-      Wave.toSpawn = Math.max(3, Math.floor(Wave.toSpawn * 0.7));
+      Wave.isBossWave = (Wave.num % 5 === 0);
+      Wave.bossSpawned = false;
+      Wave.toSpawn = Wave.isBossWave ? 1 : Math.max(3, Math.floor(Wave.toSpawn * 0.7));
+      Wave.spawnEveryMs = Wave.isBossWave ? 900 : Wave.spawnEveryMs;
       Wave.nextSpawnAt = nowMs() + 450;
       continueOverlay.classList.add("hidden");
       State.mode = "playing";
@@ -1437,13 +1481,15 @@
     function startNextWave(){
       Wave.num++;
       Wave.active = true;
+      Wave.isBossWave = (Wave.num % 5 === 0);
+      Wave.bossSpawned = false;
 
       const w = Wave.num;
-      Wave.toSpawn = Math.floor(5 + w * 2.6);
+      Wave.toSpawn = Wave.isBossWave ? 1 : Math.floor(12 + w * 4.0);
       Wave.spawned = 0;
 
       // Faster spawn at higher waves
-      Wave.spawnEveryMs = clamp(760 - w * 20, 260, 760);
+      Wave.spawnEveryMs = Wave.isBossWave ? 900 : clamp(650 - w * 28, 180, 650);
       Wave.nextSpawnAt = nowMs() + 350;
 
       // Reward a tiny “breather” after shop
@@ -1497,23 +1543,20 @@
 
     // ---------- Spawning zombies (wave-based difficulty + types)
     function chooseZombieType(waveNum){
-      // More runners and tanks later
-      const runnerChance = clamp(0.18 + waveNum * 0.010, 0.18, 0.48);
-      const tankChance   = clamp(0.06 + waveNum * 0.008, 0.06, 0.26);
+      // More runners later; tanks disabled for now (bosses handle multi-hit)
+      const runnerChance = clamp(0.22 + waveNum * 0.012, 0.22, 0.62);
       const r = Math.random();
-      if (r < tankChance) return "tank";
-      if (r < tankChance + runnerChance) return "runner";
+      if (r < runnerChance) return "runner";
       return "normal";
     }
 
     function spawnZombie(){
       let typeKey = chooseZombieType(Wave.num);
-      const isElite = (Wave.num > 0 && Wave.num % 5 === 0 && Wave.spawned === 0);
-      if (isElite) typeKey = "tank";
+      const isElite = typeKey === "tank";
       const base = ZOMBIE_TYPES[typeKey];
 
       const speedScale = 1 + Wave.num * 0.040;  // slightly faster each wave
-      const hpScale    = (1 + Wave.num * (typeKey === "tank" ? 0.12 : 0.09)) * (isElite ? 1.65 : 1);
+      const hpScale    = (1 + Wave.num * (typeKey === "tank" ? 0.12 : 0.00)) * (isElite ? 1.65 : 1);
 
       const margin = 26;
       const x = rand(margin, State.w - margin);
@@ -1523,11 +1566,13 @@
         x, y,
         vy: base.speed * speedScale,
         r: base.r,
-        maxHp: Math.ceil(base.hp * hpScale),
+        maxHp: typeKey === "tank" ? Math.ceil(base.hp * hpScale) : 1,
         hp: 0,
         coin: base.coin + Math.floor(Wave.num * 0.25) + (isElite ? 12 : 0),
         passDmg: base.passDmg + Math.floor(Wave.num * 0.12) + (isElite ? 8 : 0),
         elite: isElite,
+        isBoss: false,
+        rank: isElite ? "elite" : "normal",
 
         // animation
         t: rand(0, 10),
@@ -1540,6 +1585,34 @@
         frameT: 0,
       };
       z.hp = z.maxHp;
+      zombies.push(z);
+    }
+
+    function spawnBoss(){
+      const bossMaxHp = Math.floor(35 + Wave.num * 12);
+      const baseSpeed = 30 + Wave.num * 0.5;
+      const margin = 32;
+      const x = rand(margin, State.w - margin);
+      const y = rand(State.playTop + 12, State.playTop + 38);
+      const z = {
+        type: "boss",
+        rank: "boss",
+        isBoss: true,
+        elite: true,
+        x, y,
+        vy: baseSpeed,
+        r: 30,
+        maxHp: bossMaxHp,
+        hp: bossMaxHp,
+        coin: 30 + Math.floor(Wave.num * 5),
+        passDmg: 30 + Math.floor(Wave.num * 1.2),
+        t: rand(0, 10),
+        bob: 0,
+        step: rand(0, Math.PI*2),
+        hitT: 0,
+        frame: 0,
+        frameT: 0,
+      };
       zombies.push(z);
     }
 
@@ -1619,6 +1692,26 @@
       const progress = clamp(1 - (remaining / totalWave), 0, 1);
       waveFillEl.style.width = `${progress*100}%`;
       waveProgressLabel.textContent = `${Math.max(0, totalWave-remaining)}/${totalWave}`;
+
+      updateBossUI();
+    }
+
+    function findBoss(){
+      for (let i=0;i<zombies.length;i++){
+        if (zombies[i].isBoss) return zombies[i];
+      }
+      return null;
+    }
+
+    function updateBossUI(){
+      const boss = findBoss();
+      const show = !!boss && (State.mode === "playing" || State.mode === "paused");
+      bossBar.classList.toggle("hidden", !show);
+      if (!show) return;
+      bossBar.style.top = `${State.playTop + 6}px`;
+      const pct = clamp(boss.hp / boss.maxHp, 0, 1);
+      bossHpFill.style.transform = `scaleX(${pct})`;
+      bossHpText.textContent = `${Math.max(0, Math.ceil(boss.hp))}/${Math.max(1, Math.floor(boss.maxHp))}`;
     }
 
     // ---------- Rendering helpers
@@ -1725,8 +1818,8 @@
       ctx.arc(0, -r*0.58, r*0.18, 0.1*Math.PI, 0.9*Math.PI);
       ctx.stroke();
 
-      // HP bar (only if damaged)
-      if (z.hp < z.maxHp) {
+      // HP bar (only if damaged and multi-hit)
+      if (z.maxHp > 1 && z.hp < z.maxHp) {
         const bw = r*1.3;
         const bh = Math.max(4, r*0.18);
         const px = -bw/2;
@@ -1796,7 +1889,7 @@
       }
 
       // HP bar
-      if (z.hp < z.maxHp) {
+      if (z.maxHp > 1 && z.hp < z.maxHp) {
         const bw = z.r*1.35;
         const bh = Math.max(4, z.r*0.18);
         const px = -bw/2;
@@ -1869,13 +1962,20 @@
       if (State.mode !== "playing") { updateHUD(); return; }
       if (State.paused) return;
 
-      if (pointerDown) {
-        if (zombies.length) tryShootAt(pointerPos.x, pointerPos.y);
+      for (const [pid, ps] of pointerState.entries()) {
+        attemptShoot(pid, ps.x, ps.y);
       }
 
       // Spawn logic
       const t = nowMs();
-      if (Wave.active && Wave.spawned < Wave.toSpawn && t >= Wave.nextSpawnAt) {
+      if (Wave.active && Wave.isBossWave) {
+        if (!Wave.bossSpawned && t >= Wave.nextSpawnAt) {
+          spawnBoss();
+          Wave.spawned++;
+          Wave.bossSpawned = true;
+          Wave.nextSpawnAt = t + Wave.spawnEveryMs;
+        }
+      } else if (Wave.active && Wave.spawned < Wave.toSpawn && t >= Wave.nextSpawnAt) {
         spawnZombie();
         Wave.spawned++;
         Wave.nextSpawnAt = t + Wave.spawnEveryMs * rand(0.72, 1.10);
@@ -1920,8 +2020,13 @@
       }
 
       // Wave complete?
-      if (Wave.active && Wave.spawned >= Wave.toSpawn && zombies.length === 0) {
-        waveCleared();
+      const bossAlive = zombies.some(z => z.isBoss);
+      if (Wave.active) {
+        if (Wave.isBossWave) {
+          if (Wave.bossSpawned && !bossAlive) waveCleared();
+        } else if (Wave.spawned >= Wave.toSpawn && zombies.length === 0) {
+          waveCleared();
+        }
       }
 
       updateHUD();
