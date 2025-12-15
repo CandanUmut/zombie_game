@@ -761,6 +761,8 @@
     const randi = (a, b) => (a + Math.floor(Math.random() * (b - a + 1)));
     const nowMs = () => performance.now();
     const fmt = (n) => Math.floor(n).toString();
+    const triWave = (t) => 2/Math.PI * Math.asin(Math.sin(t));
+    const MAX_Z = 75;
 
     function showToast(msg) {
       toastEl.textContent = msg;
@@ -1076,6 +1078,7 @@
       active: false,
       isBossWave: false,
       bossSpawned: false,
+      mood: "balanced",
     };
 
     function updateBestLabels(){
@@ -1089,9 +1092,9 @@
 
     // ---------- Zombie types
     const ZOMBIE_TYPES = {
-      normal: { name:"Normal", speed: 52, hp: 1,  coin: 4,  passDmg: 8,  r: 18 },
-      runner: { name:"Runner", speed: 95, hp: 1,  coin: 5,  passDmg: 10, r: 16 },
-      tank:   { name:"Tank",   speed: 38, hp: 3,  coin: 12, passDmg: 18, r: 22 },
+      normal: { name:"Normal", speed: 52, hp: 1,  coinMin: 2, coinMax: 3,  passDmg: 8,  r: 18 },
+      runner: { name:"Runner", speed: 95, hp: 1,  coinMin: 3, coinMax: 4,  passDmg: 10, r: 16 },
+      tank:   { name:"Tank",   speed: 36, hp: 3,  coinMin: 6, coinMax: 7,  passDmg: 20, r: 22 },
     };
 
     // ---------- Entity pools
@@ -1688,6 +1691,22 @@
       Combo.value = 0; Combo.timer = 0;
     }
 
+    function pickWaveMood(waveNum){
+      // Lightweight "director" to vary wave flavor
+      const weights = [
+        { key: "balanced", w: 0.40 },
+        { key: "swarm",    w: 0.24 + Math.sin(waveNum * 0.22) * 0.03 },
+        { key: "runner",   w: 0.20 + clamp(waveNum * 0.01, 0, 0.18) },
+        { key: "wiggle",   w: 0.16 + clamp(waveNum * 0.008, 0, 0.16) },
+      ];
+      const total = weights.reduce((s,a) => s + a.w, 0);
+      let r = Math.random() * total;
+      for (const w of weights){
+        r -= w.w; if (r <= 0) return w.key;
+      }
+      return "balanced";
+    }
+
     // ---------- Game flow
     function resetAll(){
       zombies.length = 0;
@@ -1759,9 +1778,10 @@
       Wave.active = true;
       Wave.isBossWave = (Wave.num % 5 === 0);
       Wave.bossSpawned = false;
+      Wave.mood = pickWaveMood(Wave.num);
       const w = Wave.num;
-      Wave.toSpawn = Wave.isBossWave ? 1 : Math.floor(12 + w * 4.0);
-      Wave.spawnEveryMs = Wave.isBossWave ? 900 : clamp(650 - w * 28, 180, 650);
+      Wave.toSpawn = Wave.isBossWave ? 1 : Math.floor(14 + w * 5.2 + Math.pow(w, 1.15) * 1.2);
+      Wave.spawnEveryMs = Wave.isBossWave ? 900 : clamp(620 - w * 30, 140, 620);
       Wave.nextSpawnAt = nowMs() + 450;
       if (Player.shieldLevel > 0) Player.shieldReady = true;
       saveGame();
@@ -1796,13 +1816,14 @@
       Wave.active = true;
       Wave.isBossWave = (Wave.num % 5 === 0);
       Wave.bossSpawned = false;
+      Wave.mood = pickWaveMood(Wave.num);
 
       const w = Wave.num;
-      Wave.toSpawn = Wave.isBossWave ? 1 : Math.floor(12 + w * 4.0);
+      Wave.toSpawn = Wave.isBossWave ? 1 : Math.floor(14 + w * 5.2 + Math.pow(w, 1.15) * 1.2);
       Wave.spawned = 0;
 
       // Faster spawn at higher waves
-      Wave.spawnEveryMs = Wave.isBossWave ? 900 : clamp(650 - w * 28, 180, 650);
+      Wave.spawnEveryMs = Wave.isBossWave ? 900 : clamp(620 - w * 30, 140, 620);
       Wave.nextSpawnAt = nowMs() + 250;
 
       // Reward a tiny “breather” after shop
@@ -1814,6 +1835,8 @@
       Wave.active = false;
       Wave.clearedAt = nowMs();
       State.mode = "shop";
+      const waveBonus = Math.floor(6 + Wave.num * 1.2);
+      addCoins(waveBonus, State.w*0.5, State.playTop + 20);
       if (Wave.num > (Save.bestWave||0)) { Save.bestWave = Wave.num; persistSave(); updateBestLabels(); }
       saveGame();
       openShop();
@@ -1881,36 +1904,96 @@
 
     // ---------- Spawning zombies (wave-based difficulty + types)
     function chooseZombieType(waveNum){
-      // More runners later; tanks disabled for now (bosses handle multi-hit)
-      const runnerChance = clamp(0.22 + waveNum * 0.012, 0.22, 0.62);
-      const r = Math.random();
-      if (r < runnerChance) return "runner";
-      return "normal";
+      const baseRunner = clamp(0.22 + waveNum * 0.012, 0.22, 0.62);
+      let runnerW = baseRunner;
+      let normalW = 1 - baseRunner;
+      // nudge by mood
+      if (Wave.mood === "runner") runnerW += 0.25;
+      if (Wave.mood === "swarm") normalW += 0.18;
+      if (Wave.mood === "wiggle") { runnerW += 0.08; normalW += 0.08; }
+      const total = runnerW + normalW;
+      const r = Math.random() * total;
+      return (r < runnerW) ? "runner" : "normal";
     }
 
     function spawnZombie(){
       let typeKey = chooseZombieType(Wave.num);
-      const isElite = typeKey === "tank";
-      const base = ZOMBIE_TYPES[typeKey];
-
-      const speedScale = 1 + Wave.num * 0.040;  // slightly faster each wave
-      const hpScale    = (1 + Wave.num * (typeKey === "tank" ? 0.12 : 0.00)) * (isElite ? 1.65 : 1);
-
       const margin = 26;
       const x = rand(margin, State.w - margin);
       const y = rand(State.playTop + 10, State.playTop + 50);
+
+      // Elite / tank rolls
+      const eliteChance = clamp(0.04 + Wave.num * 0.003, 0.04, 0.14);
+      const tankChance = Wave.num >= 12 ? clamp(0.01 + Wave.num * 0.0012, 0.01, 0.04) : 0;
+      let hpType = "normal";
+      let rank = "normal";
+      if (!Wave.isBossWave && Math.random() < tankChance) {
+        typeKey = "tank";
+        hpType = "tank";
+        rank = "elite";
+      } else if (!Wave.isBossWave && Math.random() < eliteChance) {
+        hpType = "elite";
+        rank = "elite";
+      }
+
+      const base = ZOMBIE_TYPES[typeKey];
+
+      const speedScale = 1 + Wave.num * 0.040;  // slightly faster each wave
+      const speedJitter = rand(0.9, 1.08);
+
+      let maxHp = base.hp;
+      if (hpType === "elite") maxHp = Math.max(2, Math.ceil(base.hp * 1.1));
+      if (hpType === "tank") maxHp = Math.max(3, Math.ceil(base.hp * 1.0));
+
+      // Sprinters (runners that go extra fast)
+      let sprinter = false;
+      let sprintMult = 1;
+      if (typeKey === "runner" && Wave.num > 6) {
+        const sprinterChance = clamp(0.10 + Wave.num * 0.01, 0.10, 0.18);
+        if (Math.random() < sprinterChance) {
+          sprinter = true;
+          sprintMult = rand(1.35, 1.65);
+        }
+      }
+
+      let vy = base.speed * speedScale * speedJitter * sprintMult;
+      if (maxHp === 2) vy *= 0.92;
+      if (maxHp >= 3) vy *= 0.78;
+
+      // Horizontal drift
+      const wiggleChance = clamp(0.20 + Wave.num * 0.008, 0.20, 0.40);
+      const shouldWiggle = Math.random() < wiggleChance;
+      const wiggleAmp = shouldWiggle ? rand(10, (rank === "elite" ? 55 : 40)) * (sprinter ? 0.6 : 1) : 0;
+      const wiggleFreq = shouldWiggle ? rand(0.8, 2.2) : 0;
+      const wigglePhase = rand(0, Math.PI*2);
+      const wiggleMode = shouldWiggle && Math.random() < (Wave.mood === "wiggle" ? 0.45 : 0.25) ? "tri" : "sin";
+
+      const baseCoin = randi(base.coinMin, base.coinMax);
+      const coinInflate = Math.floor(Wave.num * 0.08);
+      let coin = baseCoin + coinInflate;
+      if (rank === "elite") coin += (maxHp >= 3 ? 4 : 2);
+      if (sprinter) coin += 1;
+
       const z = {
         type: typeKey,
         x, y,
-        vy: base.speed * speedScale,
-        r: base.r,
-        maxHp: typeKey === "tank" ? Math.ceil(base.hp * hpScale) : 1,
+        x0: x,
+        vy,
+        speedJitter,
+        sprinter,
+        wiggleAmp,
+        wiggleFreq,
+        wigglePhase,
+        wiggleMode,
+        r: base.r * (sprinter ? 0.92 : maxHp >= 3 ? 1.18 : maxHp === 2 ? 1.05 : 1),
+        maxHp,
         hp: 0,
-        coin: base.coin + Math.floor(Wave.num * 0.25) + (isElite ? 12 : 0),
-        passDmg: base.passDmg + Math.floor(Wave.num * 0.12) + (isElite ? 8 : 0),
-        elite: isElite,
+        coin,
+        passDmg: base.passDmg + Math.floor(Wave.num * 0.12) + (maxHp > 1 ? 5 : 0),
+        elite: rank === "elite",
         isBoss: false,
-        rank: isElite ? "elite" : "normal",
+        rank,
+        hpType,
 
         // animation
         t: rand(0, 10),
@@ -1938,6 +2021,7 @@
         isBoss: true,
         elite: true,
         x, y,
+        x0: x,
         vy: baseSpeed,
         r: 30,
         maxHp: bossMaxHp,
@@ -1948,6 +2032,9 @@
         bob: 0,
         step: rand(0, Math.PI*2),
         hitT: 0,
+        wiggleAmp: 10,
+        wiggleFreq: 0.35,
+        wigglePhase: rand(0, Math.PI*2),
         frame: 0,
         frameT: 0,
       };
@@ -2091,8 +2178,9 @@
       // Colors by type (subtle)
       const isRunner = z.type === "runner";
       const isTank   = z.type === "tank";
-      const skin = isTank ? "rgba(140, 190, 120, 0.95)" : isRunner ? "rgba(125, 200, 145, 0.95)" : "rgba(120, 190, 135, 0.95)";
-      const cloth= isTank ? "rgba(60, 80, 92, 0.95)" : isRunner ? "rgba(70, 86, 105, 0.95)" : "rgba(68, 84, 100, 0.95)";
+      const isSprinter = !!z.sprinter;
+      const skin = isTank ? "rgba(140, 190, 120, 0.95)" : isRunner ? (isSprinter ? "rgba(135, 185, 240, 0.95)" : "rgba(125, 200, 145, 0.95)") : "rgba(120, 190, 135, 0.95)";
+      const cloth= isTank ? "rgba(60, 80, 92, 0.95)" : isRunner ? (isSprinter ? "rgba(90, 110, 170, 0.95)" : "rgba(70, 86, 105, 0.95)") : "rgba(68, 84, 100, 0.95)";
       const dark = "rgba(10,12,16,.65)";
       const outline = z.hitT > 0 ? "rgba(255,255,255,.28)" : "rgba(0,0,0,.35)";
 
@@ -2105,12 +2193,25 @@
       ctx.ellipse(0, r*1.25, r*0.9, r*0.35, 0, 0, Math.PI*2);
       ctx.fill();
 
+      if (isSprinter) {
+        ctx.globalAlpha = 0.30;
+        ctx.fillStyle = "rgba(96,165,250,.9)";
+        ctx.beginPath();
+        ctx.ellipse(-r*0.2, r*0.55, r*0.9, r*0.35, 0, 0, Math.PI*2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
       if (z.elite) {
-        ctx.strokeStyle = "rgba(250,204,21,.9)";
+        ctx.strokeStyle = z.maxHp >= 3 ? "rgba(248,113,113,.9)" : "rgba(250,204,21,.9)";
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.arc(0, 0, r*1.15, 0, Math.PI*2);
         ctx.stroke();
+        ctx.fillStyle = z.maxHp >= 3 ? "rgba(248,113,113,.8)" : "rgba(250,204,21,.8)";
+        ctx.beginPath();
+        ctx.arc(r*0.62, -r*0.9, r*0.22, 0, Math.PI*2);
+        ctx.fill();
       }
 
       // legs swing
@@ -2234,6 +2335,23 @@
       ctx.globalAlpha = 0.98;
       ctx.drawImage(img, f*fw, 0, fw, fh, -size/2, -size/2, size, size);
 
+      if (z.sprinter) {
+        ctx.globalAlpha = 0.26;
+        ctx.fillStyle = "rgba(96,165,250,.9)";
+        ctx.beginPath();
+        ctx.ellipse(-z.r*0.2, z.r*0.6, z.r*0.95, z.r*0.35, 0, 0, Math.PI*2);
+        ctx.fill();
+      }
+
+      if (z.elite) {
+        ctx.globalAlpha = 0.8;
+        ctx.strokeStyle = z.maxHp >= 3 ? "rgba(248,113,113,.9)" : "rgba(250,204,21,.85)";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(0, 0, z.r*1.2, 0, Math.PI*2);
+        ctx.stroke();
+      }
+
       // outline on hit
       if (z.hitT > 0) {
         ctx.globalAlpha = 1;
@@ -2335,9 +2453,18 @@
             Wave.nextSpawnAt = t + Wave.spawnEveryMs;
           }
         } else if (Wave.active && Wave.spawned < Wave.toSpawn && t >= Wave.nextSpawnAt) {
-          spawnZombie();
-          Wave.spawned++;
-          Wave.nextSpawnAt = t + Wave.spawnEveryMs * rand(0.72, 1.10);
+          if (zombies.length >= MAX_Z) {
+            Wave.nextSpawnAt = t + 160;
+          } else {
+            spawnZombie();
+            Wave.spawned++;
+            const surgeReady = (Wave.spawned % 7 === 0) && Wave.spawned < Wave.toSpawn && zombies.length < MAX_Z;
+            if (surgeReady && Math.random() < 0.35) {
+              spawnZombie();
+              Wave.spawned++;
+            }
+            Wave.nextSpawnAt = t + Wave.spawnEveryMs * rand(0.72, 1.10);
+          }
         }
 
       // Turret
@@ -2353,6 +2480,21 @@
         const bobAmp = (z.type === "runner") ? 4.6 : (z.type === "tank") ? 2.9 : 3.6;
         z.step += dt * ((z.type === "runner") ? 10.0 : (z.type === "tank") ? 6.2 : 8.0);
         z.bob = Math.sin(z.t*8.2) * bobAmp;
+
+        if (!Number.isFinite(z.x0)) z.x0 = z.x;
+        if (!z.isBoss) {
+          const wa = z.wiggleAmp || 0;
+          if (wa > 0) {
+            const osc = (z.wiggleMode === "tri")
+              ? triWave(z.t * (z.wiggleFreq || 1) + (z.wigglePhase || 0))
+              : Math.sin(z.t * (z.wiggleFreq || 1) + (z.wigglePhase || 0));
+            const marginX = 18;
+            z.x = clamp(z.x0 + osc * wa, marginX, State.w - marginX);
+          }
+        } else if (z.wiggleAmp > 0) {
+          const osc = Math.sin(z.t * (z.wiggleFreq || 0.35) + (z.wigglePhase || 0));
+          z.x = clamp(z.x0 + osc * z.wiggleAmp, 22, State.w - 22);
+        }
 
         z.y += z.vy * dt;
         if (z.y < State.playTop) z.y = State.playTop;
