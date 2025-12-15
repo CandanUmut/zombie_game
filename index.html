@@ -147,6 +147,15 @@
       overflow:hidden;
       position:relative;
     }
+    .hpWrap.regen .hpBar::after{
+      content:"";
+      position:absolute; inset:0;
+      background: linear-gradient(120deg, rgba(34,197,94,.26), rgba(34,197,94,.05));
+      animation: regenPulse 1s linear infinite;
+      pointer-events:none;
+      mix-blend-mode:screen;
+    }
+    @keyframes regenPulse{from{transform: translateX(-12px);}to{transform: translateX(12px);}}
     .hpFill{
       height:100%;
       width:100%;
@@ -167,6 +176,12 @@
     .waveFill{position:absolute; left:0; top:0; height:100%; width:0%; background: linear-gradient(90deg, rgba(139,92,246,.95), rgba(94,234,212,.9)); box-shadow: 0 0 14px rgba(94,234,212,.45); border-right:1px solid rgba(255,255,255,.35);}
     .tag{font-size:11px; color:var(--muted); font-weight:800; letter-spacing:.5px; text-transform:uppercase;}
     .pauseBtn{padding:9px 10px; border-radius:12px; min-width:46px;}
+    .comboHud{pointer-events:none; display:flex; align-items:center; gap:10px; min-width:150px;}
+    .comboHud .v{font-size:20px; letter-spacing:0.3px;}
+    .comboBar{position:relative; flex:1; height:10px; border-radius:999px; background:rgba(255,255,255,.08); border:1px solid var(--line); overflow:hidden;}
+    .comboFill{position:absolute; inset:0; width:0%; background: linear-gradient(90deg, rgba(168,85,247,.9), rgba(94,234,212,.8)); box-shadow: 0 0 12px rgba(168,85,247,.4);}
+    .comboHud.pop{animation: comboPop 0.16s ease;}
+    @keyframes comboPop{0%{transform:scale(1);}50%{transform:scale(1.06);}100%{transform:scale(1);}}
 
     #bossBar{
       position:absolute;
@@ -368,6 +383,16 @@
           </div>
         </div>
 
+        <div class="pill comboHud" id="comboHud">
+          <div class="stat">
+            <div class="k">Combo</div>
+            <div class="v" id="comboValue">—</div>
+          </div>
+          <div class="comboBar" aria-label="Combo timer">
+            <div class="comboFill" id="comboFill"></div>
+          </div>
+        </div>
+
         <div class="pill">
           <div class="stat">
             <div class="k">Tap Dmg</div>
@@ -524,17 +549,6 @@
 
             <div class="row">
               <div class="meta">
-                <div class="name">Auto Shooter</div>
-                <div class="desc" id="autoDesc">Hands-free shots.</div>
-              </div>
-              <div class="meta" style="text-align:right">
-                <div class="price" id="costAuto">—</div>
-                <button class="btn primary" id="buyAuto">Buy</button>
-              </div>
-            </div>
-
-            <div class="row">
-              <div class="meta">
                 <div class="name">Shield</div>
                 <div class="desc" id="shieldDesc">Absorb one leak.</div>
               </div>
@@ -647,12 +661,16 @@
     const hpFill  = document.getElementById("hpFill");
     const hpGhost = document.getElementById("hpGhost");
     const hpPct   = document.getElementById("hpPct");
+    const hpWrap  = document.querySelector(".hpWrap");
     const coinLabel = document.getElementById("coinLabel");
     const waveLabel = document.getElementById("waveLabel");
     const scoreLabel = document.getElementById("scoreLabel");
     const dmgLabel = document.getElementById("dmgLabel");
     const rateLabel = document.getElementById("rateLabel");
     const turretLabel = document.getElementById("turretLabel");
+    const comboHud = document.getElementById("comboHud");
+    const comboValue = document.getElementById("comboValue");
+    const comboFill = document.getElementById("comboFill");
     const waveFillEl = document.getElementById("waveFill");
     const waveProgressLabel = document.getElementById("waveProgressLabel");
     const bossBar = document.getElementById("bossBar");
@@ -712,14 +730,12 @@
     const costTurret = document.getElementById("costTurret");
     const costMulti = document.getElementById("costMulti");
     const costExplosive = document.getElementById("costExplosive");
-    const costAuto = document.getElementById("costAuto");
     const costShield = document.getElementById("costShield");
     const buyDmg = document.getElementById("buyDmg");
     const buyRate = document.getElementById("buyRate");
     const buyTurret = document.getElementById("buyTurret");
     const buyMulti = document.getElementById("buyMulti");
     const buyExplosive = document.getElementById("buyExplosive");
-    const buyAuto = document.getElementById("buyAuto");
     const buyShield = document.getElementById("buyShield");
     const nextWaveBtn = document.getElementById("nextWaveBtn");
     const restartBtn = document.getElementById("restartBtn");
@@ -729,7 +745,6 @@
     const turretDesc = document.getElementById("turretDesc");
     const multiDesc = document.getElementById("multiDesc");
     const explosiveDesc = document.getElementById("explosiveDesc");
-    const autoDesc = document.getElementById("autoDesc");
     const shieldDesc = document.getElementById("shieldDesc");
 
     const pauseOverlay = document.getElementById("pauseOverlay");
@@ -763,8 +778,8 @@
     const fmt = (n) => Math.floor(n).toString();
     const triWave = (t) => 2/Math.PI * Math.asin(Math.sin(t));
     const MAX_Z = 90;
-    const AUTO_CHIP_BOSS = 1;
-    const AUTO_CHIP_ELITE = 1;
+    const TURRET_CHIP_BOSS = 1;
+    const TURRET_CHIP_ELITE = 1;
 
     function showToast(msg) {
       toastEl.textContent = msg;
@@ -782,7 +797,6 @@
       turretLevel: 0,
       multishotLevel: 0,
       explosiveLevel: 0,
-      autoLevel: 0,
       shieldLevel: 0,
       bestWave: 0,
       bestScore: 0,
@@ -801,6 +815,11 @@
         const raw = localStorage.getItem(SAVE_KEY);
         if (raw) Object.assign(save, JSON.parse(raw));
       } catch (e) {}
+
+      // remove deprecated auto shooter data safely
+      if (typeof save.autoLevel !== "undefined") {
+        delete save.autoLevel;
+      }
 
       // migrate old bests
       const oldWave = +localStorage.getItem("ztd_bestWave") || 0;
@@ -822,7 +841,6 @@
       Save.turretLevel = Player.turretLevel;
       Save.multishotLevel = Player.multishotLevel;
       Save.explosiveLevel = Player.explosiveLevel;
-      Save.autoLevel = Player.autoLevel;
       Save.shieldLevel = Player.shieldLevel;
       persistSave();
     }
@@ -1037,32 +1055,22 @@
       turretLevel: 0,
       turretCooldownMs: 900,
       turretLastShotAt: -1e9,
+      turretHeat: 0,
 
       multishotLevel: 0,
       explosiveLevel: 0,
-      autoLevel: 0,
-      autoCooldownMs: 1400,
-      autoLastShotAt: -1e9,
-      autoHeat: 0,
 
       shieldLevel: 0,
       shieldReady: false,
+
+      lastDamageAt: nowMs(),
     };
 
     function recalcFromLevels(){
       Player.tapDamage = 1 + Player.dmgLevel;
       const base = 320;
       Player.tapCooldownMs = clamp(base * Math.pow(0.90, Player.rateLevel), 80, 320);
-      Player.turretCooldownMs = clamp(1200 * Math.pow(0.92, Math.max(0, Player.turretLevel-1)), 420, 1200);
-      if (Player.autoLevel <= 0) {
-        Player.autoCooldownMs = Infinity;
-      } else if (Player.autoLevel === 1) {
-        Player.autoCooldownMs = 1500;
-      } else if (Player.autoLevel === 2) {
-        Player.autoCooldownMs = 1200;
-      } else {
-        Player.autoCooldownMs = 950;
-      }
+      Player.turretCooldownMs = clamp(1200 * Math.pow(0.92, Math.max(0, Player.turretLevel-1)), 460, 1200);
     }
 
     function applySaveToPlayer(){
@@ -1072,12 +1080,15 @@
       Player.turretLevel = Save.turretLevel || 0;
       Player.multishotLevel = Save.multishotLevel || 0;
       Player.explosiveLevel = Save.explosiveLevel || 0;
-      Player.autoLevel = Save.autoLevel || 0;
       Player.shieldLevel = Save.shieldLevel || 0;
       recalcFromLevels();
     }
 
+    const COMBO_WINDOW = 2.2;
+    const COMBO_MAX = 50;
     const Combo = { value:0, timer:0 };
+    const REGEN_DELAY_MS = 10000;
+    const REGEN_RATE = 1; // hp per second
 
     const Wave = {
       num: 0,
@@ -1306,7 +1317,8 @@
       z.hp -= dmg;
       z.hitT = 0.12;
       if (spawnFx) {
-        spawnParticles(z.x, z.y, source === "auto" ? 8 : 12, 140);
+        const particleCount = source === "turret" ? 8 : 12;
+        spawnParticles(z.x, z.y, particleCount, 140);
         addRing(z.x, z.y, 10, 0.25);
       }
       if (hitSound) Sound.play("hit");
@@ -1400,10 +1412,14 @@
       addCoins(z.coin, z.x, z.y);
       addFloatingText(z.x, z.y-10, `+${z.coin}c`, "#facc15", 1.0, -24);
 
-      addCombo();
-      const comboMult = 1 + Combo.value * 0.1;
-      const bonus = Math.floor((10 + Wave.num * 3) * comboMult) + z.coin;
+      const comboVal = addCombo(z.x, z.y - 16);
+      const comboMult = Math.min(1 + comboVal * 0.06, 3);
+      const baseScore = 10 + Wave.num * 3;
+      const bonus = Math.floor(baseScore * comboMult) + z.coin;
       Player.score += bonus;
+      if (comboVal > 0 && comboVal % 10 === 0) {
+        addCoins(1, z.x, z.y - 20);
+      }
       Save.bestScore = Math.max(Save.bestScore, Player.score);
       saveGame();
 
@@ -1439,12 +1455,12 @@
         return;
       }
       Player.hp = Math.max(0, Player.hp - amount);
+      Player.lastDamageAt = nowMs();
       State.shakeT = 0.18;
       State.shakeMag = 9 + amount * 0.22;
       State.damageFlash = 0.35;
       if (State.reduceMotion) { State.shakeMag *= 0.5; State.damageFlash *= 0.6; }
       vignette.style.opacity = "0.32";
-      resetCombo();
       if (navigator.vibrate && Save.settings.vibrationOn) navigator.vibrate([20,30,20]);
       Sound.play("hurt");
 
@@ -1630,18 +1646,6 @@
       updateShopUI();
     });
 
-    buyAuto.addEventListener("click", () => {
-      Sound.play("ui");
-      const c = costAutoUp();
-      if (!spendCoins(c)) return showToast("Not enough coins");
-      Player.autoLevel = Math.min(3, Player.autoLevel + 1);
-      Save.autoLevel = Player.autoLevel;
-      recalcFromLevels();
-      saveGame();
-      showToast("Auto shooter upgraded");
-      updateShopUI();
-    });
-
     buyShield.addEventListener("click", () => {
       Sound.play("ui");
       const c = costShieldUp();
@@ -1673,9 +1677,6 @@
     function costExplosiveUp(){
       return Player.explosiveLevel >= 2 ? Infinity : Math.floor(110 * Math.pow(1.85, Player.explosiveLevel));
     }
-    function costAutoUp(){
-      return Player.autoLevel >= 3 ? Infinity : Math.floor(130 * Math.pow(1.70, Player.autoLevel));
-    }
     function costShieldUp(){
       return Player.shieldLevel >= 1 ? Infinity : 200;
     }
@@ -1697,14 +1698,31 @@
       addFloatingText(x,y,`+${amount}🪙`,`#facc15`,0.9,-26);
     }
 
-    function addCombo(){
-      Combo.timer = 1.8;
-      Combo.value = Math.min(50, Combo.value + 1);
-      addFloatingText(State.w-40, 60, `COMBO x${Combo.value}`, "#a855f7", 0.8, -12);
+    function updateComboUI(){
+      const active = Combo.value > 0 && Combo.timer > 0;
+      const pct = active ? clamp(Combo.timer / COMBO_WINDOW, 0, 1) : 0;
+      comboHud.style.opacity = active ? 1 : 0.45;
+      comboValue.textContent = active ? `x${Combo.value}` : "—";
+      comboFill.style.width = `${pct * 100}%`;
     }
 
-    function resetCombo(){
+    function addCombo(x=State.w-40, y=60){
+      if (Combo.timer > 0 && Combo.value > 0) Combo.value++;
+      else Combo.value = 1;
+      Combo.value = Math.min(COMBO_MAX, Combo.value);
+      Combo.timer = COMBO_WINDOW;
+      comboHud.classList.remove("pop");
+      void comboHud.offsetWidth;
+      comboHud.classList.add("pop");
+      addFloatingText(x, y, `COMBO x${Combo.value}`, "#a855f7", 0.8, -12);
+      updateComboUI();
+      return Combo.value;
+    }
+
+    function resetCombo(showToastMessage=false){
+      if (showToastMessage && Combo.value > 0) showToast("Combo lost");
       Combo.value = 0; Combo.timer = 0;
+      updateComboUI();
     }
 
     function pickWaveMood(waveNum){
@@ -1724,10 +1742,10 @@
       Player.kills = 0;
       Player.misses = 0;
       Player.turretLastShotAt = -1e9;
-      Player.autoLastShotAt = -1e9;
-      Player.autoHeat = 0;
+      Player.turretHeat = 0;
       Player.coins = Save.coinsBank;
       Player.shieldReady = Player.shieldLevel > 0;
+      Player.lastDamageAt = nowMs();
       recalcFromLevels();
       Combo.value = 0; Combo.timer = 0;
       State.invulnUntil = 0;
@@ -1781,6 +1799,7 @@
       const cost = revivePrice();
       if (!spendCoins(cost)) return showToast("Not enough coins");
       Player.hp = Math.ceil(Player.maxHp * 0.5);
+      Player.lastDamageAt = nowMs();
       State.invulnUntil = nowMs() + 1200;
       zombies.length = 0;
       Wave.spawned = 0;
@@ -1876,7 +1895,6 @@
       costTurret.textContent = Player.turretLevel === 0 ? `Cost: ${costTurretUp()} (install)` : `Cost: ${costTurretUp()} coins`;
       costMulti.textContent = Player.multishotLevel >= 2 ? `Maxed` : `Cost: ${costMultiUp()} coins`;
       costExplosive.textContent = Player.explosiveLevel >= 2 ? `Maxed` : `Cost: ${costExplosiveUp()} coins`;
-      costAuto.textContent = Player.autoLevel >= 3 ? `Maxed` : `Cost: ${costAutoUp()} coins`;
       costShield.textContent = Player.shieldLevel >= 1 ? `Owned` : `Cost: ${costShieldUp()} coins`;
 
       buyDmg.disabled = Player.coins < costDamage();
@@ -1884,7 +1902,6 @@
       buyTurret.disabled = Player.coins < costTurretUp();
       buyMulti.disabled = Player.coins < costMultiUp();
       buyExplosive.disabled = Player.coins < costExplosiveUp();
-      buyAuto.disabled = Player.coins < costAutoUp();
       buyShield.disabled = Player.coins < costShieldUp();
 
       buyDmg.style.opacity = buyDmg.disabled ? 0.55 : 1;
@@ -1892,7 +1909,6 @@
       buyTurret.style.opacity = buyTurret.disabled ? 0.55 : 1;
       buyMulti.style.opacity = buyMulti.disabled ? 0.55 : 1;
       buyExplosive.style.opacity = buyExplosive.disabled ? 0.55 : 1;
-      buyAuto.style.opacity = buyAuto.disabled ? 0.55 : 1;
       buyShield.style.opacity = buyShield.disabled ? 0.55 : 1;
 
       dmgDesc.textContent = `+1 tap dmg (Lv ${Player.dmgLevel})`;
@@ -1903,19 +1919,15 @@
       multiDesc.textContent = `Hit ${Player.multishotLevel === 0 ? "1" : Player.multishotLevel + 1} target(s) → ${msNext}`;
       const explRadius = 60 + Player.explosiveLevel * 12;
       explosiveDesc.textContent = Player.explosiveLevel >= 2 ? `Explodes nearby 1-hp foes (radius ${explRadius}) (maxed)` : `Splash pops 1-hp in r${explRadius}`;
-      const autoRateNow = Player.autoLevel > 0 ? (1000/Player.autoCooldownMs).toFixed(1) : "0";
-      const autoNextCd = clamp(Player.autoCooldownMs * 0.82, 420, 1400);
-      autoDesc.textContent = Player.autoLevel === 0 ? "Auto shoots nearest zombie" : `Auto fire ${autoRateNow}/s → ${(1000/autoNextCd).toFixed(1)}/s`;
       shieldDesc.textContent = Player.shieldLevel ? "Shield charged (blocks one leak)" : "Absorb one leak";
 
       const ratePerSec = (1000 / Player.tapCooldownMs).toFixed(1);
       const turretTxt = Player.turretLevel === 0 ? "none" : `Lv ${Player.turretLevel}`;
-      const autoTxt = Player.autoLevel === 0 ? "—" : `Lv ${Player.autoLevel}`;
       const multiTxt = Player.multishotLevel === 0 ? "—" : `Lv ${Player.multishotLevel}`;
       const explTxt = Player.explosiveLevel === 0 ? "—" : `Lv ${Player.explosiveLevel}`;
       const shieldTxt = Player.shieldLevel === 0 ? "—" : (Player.shieldReady ? "Ready" : "Used");
       shopStats.textContent =
-        `Bank ${Player.coins} · Tap dmg ${Player.tapDamage} · Fire ${ratePerSec}/s · Turret ${turretTxt} · Auto ${autoTxt} · Multi ${multiTxt} · Explo ${explTxt} · Shield ${shieldTxt}`;
+        `Bank ${Player.coins} · Tap dmg ${Player.tapDamage} · Fire ${ratePerSec}/s · Turret ${turretTxt} · Multi ${multiTxt} · Explo ${explTxt} · Shield ${shieldTxt}`;
       updateHUD();
     }
 
@@ -2096,14 +2108,14 @@
     // ---------- Turret logic
     function turretDamage(){
       if (Player.turretLevel <= 0) return 0;
-      // Turret damage scales gently
-      return 1 + Math.floor(Player.turretLevel * 0.85);
+      // Turret damage scales gently (slightly toned down)
+      return 1 + Math.floor(Player.turretLevel * 0.80);
     }
 
     function turretTryShoot(){
       if (Player.turretLevel <= 0) return;
       const t = nowMs();
-      const heatMult = 1 + Player.autoHeat * 1.8;
+      const heatMult = 1 + Player.turretHeat * 1.8;
       const cd = Player.turretCooldownMs * heatMult;
       if (t - Player.turretLastShotAt < cd) return;
       if (zombies.length === 0) return;
@@ -2126,46 +2138,14 @@
       if (best === -1) return;
 
       Player.turretLastShotAt = t;
-      Player.autoHeat = Math.min(1, Player.autoHeat + 0.06);
+      Player.turretHeat = Math.min(1, Player.turretHeat + 0.06);
 
       const z = zombies[best];
       let dmg = turretDamage();
-      if (z.isBoss) dmg = AUTO_CHIP_BOSS; else if (z.elite) dmg = Math.min(dmg, AUTO_CHIP_ELITE);
+      if (z.isBoss) dmg = TURRET_CHIP_BOSS; else if (z.elite) dmg = Math.min(dmg, TURRET_CHIP_ELITE);
 
       spawnShot(tx, ty, z.x, z.y, 0.09);
       applyDamageToZombie(best, dmg, { source:"turret" });
-    }
-
-    // ---------- Auto shooter
-    function autoTryShoot(){
-      if (Player.autoLevel <= 0) return;
-      const t = nowMs();
-      const heatMult = 1 + Player.autoHeat * 1.8;
-      const cd = Player.autoCooldownMs * heatMult;
-      if (t - Player.autoLastShotAt < cd) return;
-      if (zombies.length === 0) return;
-
-      let best = -1;
-      let bestY = -1;
-      let bestD2 = 1e18;
-      const ox = State.w * 0.6;
-      const oy = State.h - 12;
-      for (let i=0;i<zombies.length;i++){
-        const z = zombies[i];
-        if (z.isCloaked) continue;
-        const dx = z.x - ox;
-        const dy = z.y - oy;
-        const d2 = dx*dx + dy*dy;
-        if (z.y > bestY || (Math.abs(z.y - bestY) < 6 && d2 < bestD2)) { bestY = z.y; bestD2 = d2; best = i; }
-      }
-      if (best === -1) return;
-      Player.autoLastShotAt = t;
-      Player.autoHeat = Math.min(1, Player.autoHeat + 0.06);
-      const z = zombies[best];
-      let dmg = Player.tapDamage * 0.85;
-      if (z.isBoss) dmg = AUTO_CHIP_BOSS; else if (z.elite) dmg = Math.min(dmg, AUTO_CHIP_ELITE);
-      spawnShot(ox, oy, z.x, z.y, 0.08);
-      applyDamageToZombie(best, dmg, { source:"auto" });
     }
 
     // ---------- HUD updates
@@ -2568,13 +2548,21 @@
       State.hpSmooth = lerp(State.hpSmooth, Player.hp, dt * 8);
       State.hpGhost = lerp(State.hpGhost, Player.hp, dt * 2.5);
       if (Combo.timer > 0){
-        Combo.timer -= dt;
-        if (Combo.timer <= 0) resetCombo();
+        Combo.timer = Math.max(0, Combo.timer - dt);
+        if (Combo.timer === 0) resetCombo(true);
       }
+      updateComboUI();
 
-      // automation heat decay
-      if (Player.autoHeat > 0) {
-        Player.autoHeat = Math.max(0, Player.autoHeat - dt * 0.10);
+      const currentTime = nowMs();
+      const regenReady = State.mode !== "gameover" && (currentTime - Player.lastDamageAt) > REGEN_DELAY_MS && Player.hp < Player.maxHp;
+      if (regenReady) {
+        Player.hp = Math.min(Player.maxHp, Player.hp + REGEN_RATE * dt);
+      }
+      if (hpWrap) hpWrap.classList.toggle("regen", regenReady);
+
+      // turret heat decay
+      if (Player.turretHeat > 0) {
+        Player.turretHeat = Math.max(0, Player.turretHeat - dt * 0.10);
       }
 
       if (State.mode !== "playing") { updateHUD(); return; }
@@ -2617,7 +2605,6 @@
 
       // Turret
       turretTryShoot();
-      autoTryShoot();
 
       // Update zombies
       for (let i=zombies.length-1; i>=0; i--){
@@ -2990,7 +2977,7 @@
     // ---------- Start / Shop UI setup text
     function setStartOverlay(){
       overlayTitle.textContent = "Tap to start";
-      overlayDesc.innerHTML = `Your first tap will also unlock audio on mobile. Survive as many waves as you can.<br>Banked coins: <b>${Save.coinsBank}</b> · Upgrades: dmg ${Save.dmgLevel}, rate ${Save.rateLevel}, turret ${Save.turretLevel}, multi ${Save.multishotLevel||0}, expl ${Save.explosiveLevel||0}, auto ${Save.autoLevel||0}, shield ${Save.shieldLevel||0}`;
+      overlayDesc.innerHTML = `Your first tap will also unlock audio on mobile. Survive as many waves as you can.<br>Banked coins: <b>${Save.coinsBank}</b> · Upgrades: dmg ${Save.dmgLevel}, rate ${Save.rateLevel}, turret ${Save.turretLevel}, multi ${Save.multishotLevel||0}, expl ${Save.explosiveLevel||0}, shield ${Save.shieldLevel||0}`;
       startBtn.textContent = "Start";
       mainOverlay.classList.remove("hidden");
       shopOverlay.classList.add("hidden");
