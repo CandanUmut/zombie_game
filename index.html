@@ -16,6 +16,7 @@
       --bad:#ef4444;
       --line:rgba(255,255,255,.08);
       --shadow:0 12px 30px rgba(0,0,0,.35);
+      --hud-glow:0 8px 24px rgba(139,92,246,.25);
     }
     *{box-sizing:border-box}
     html,body{height:100%}
@@ -52,6 +53,7 @@
     #hud .left, #hud .right{
       display:flex; align-items:center; gap:10px;
       pointer-events:auto;
+      flex-wrap:wrap;
     }
     .pill{
       background: var(--panel);
@@ -61,6 +63,7 @@
       box-shadow: var(--shadow);
       display:flex; align-items:center; gap:10px;
       min-height:38px;
+      backdrop-filter: blur(6px);
     }
     .stat{
       display:flex; flex-direction:column; line-height:1.05;
@@ -99,9 +102,9 @@
     .btn.small{padding:8px 10px; border-radius:999px; font-size:13px}
 
     /* Health bar */
-    .hpWrap{display:flex; align-items:center; gap:10px}
+    .hpWrap{display:flex; align-items:center; gap:10px; position:relative; padding-right:8px; box-shadow:var(--hud-glow)}
     .hpBar{
-      width:160px; height:12px; border-radius:999px;
+      width:200px; height:16px; border-radius:12px;
       background: rgba(255,255,255,.07);
       border:1px solid rgba(255,255,255,.09);
       overflow:hidden;
@@ -113,8 +116,19 @@
       background: linear-gradient(90deg, rgba(34,197,94,.95), rgba(34,197,94,.55));
       border-right:1px solid rgba(255,255,255,.18);
       transform-origin:left center;
+      transition: background .2s linear;
     }
-    .hpText{font-size:12px; color:var(--muted)}
+    .hpGhost{
+      position:absolute; left:0; top:0; height:100%; width:100%;
+      background: linear-gradient(90deg, rgba(255,255,255,.16), rgba(255,255,255,.05));
+      pointer-events:none;
+      transform-origin:left center;
+    }
+    .hpText{font-size:12px; color:var(--muted); font-weight:700}
+    .waveProg{width:180px; height:10px; border-radius:999px; background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.08); overflow:hidden; position:relative;}
+    .waveFill{position:absolute; left:0; top:0; height:100%; width:0%; background: linear-gradient(90deg, rgba(139,92,246,.85), rgba(94,234,212,.8)); box-shadow: 0 2px 10px rgba(139,92,246,.35);}
+    .tag{font-size:11px; color:var(--muted); font-weight:800; letter-spacing:.5px; text-transform:uppercase;}
+    .pauseBtn{padding:9px 10px; border-radius:12px; min-width:46px;}
 
     /* Canvas */
     #gameCanvas{
@@ -213,11 +227,39 @@
       opacity:1;
       transform: translateX(-50%) translateY(-2px);
     }
+
+    /* Vignette + vignette pulse */
+    #vignette{
+      position:absolute; inset:0; pointer-events:none;
+      background: radial-gradient(120% 95% at 50% 50%, rgba(0,0,0,0), rgba(0,0,0,.55));
+      opacity:0; transition: opacity .25s ease;
+      z-index:8;
+    }
+
+    /* Settings panel */
+    #settingsPanel{
+      position:absolute; right:12px; top:56px;
+      background: var(--panel2);
+      border:1px solid var(--line);
+      border-radius:14px;
+      padding:10px;
+      box-shadow: var(--shadow);
+      min-width:200px;
+      z-index:20;
+    }
+    #settingsPanel.hidden{display:none;}
+    .settingRow{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:6px 0; font-size:13px;}
+    .settingRow label{color:var(--muted); font-weight:700;}
+    .toggle{width:42px; height:22px; border-radius:999px; background:rgba(255,255,255,.16); border:1px solid var(--line); position:relative; cursor:pointer;}
+    .toggle .dot{position:absolute; width:18px; height:18px; border-radius:50%; background:#fff; top:1px; left:1px; transition: transform .18s ease;}
+    .toggle.on{background:rgba(139,92,246,.55); border-color:rgba(139,92,246,.6);} 
+    .toggle.on .dot{transform: translateX(20px);}
   </style>
 </head>
 <body>
-  <div id="root">
-    <canvas id="gameCanvas"></canvas>
+    <div id="root">
+    <div id="vignette"></div>
+      <canvas id="gameCanvas"></canvas>
 
     <div id="hud">
       <div class="left">
@@ -228,13 +270,14 @@
           </div>
           <div class="hpBar" aria-label="Health bar">
             <div class="hpFill" id="hpFill"></div>
+            <div class="hpGhost" id="hpGhost"></div>
           </div>
           <div class="hpText" id="hpPct">100%</div>
         </div>
 
         <div class="pill">
           <div class="stat">
-            <div class="k">Coins</div>
+            <div class="k">Bank</div>
             <div class="v" id="coinLabel">0</div>
           </div>
           <div class="divider"></div>
@@ -246,6 +289,16 @@
           <div class="stat">
             <div class="k">Score</div>
             <div class="v" id="scoreLabel">0</div>
+          </div>
+        </div>
+
+        <div class="pill">
+          <div class="stat">
+            <div class="k">Wave Prog</div>
+            <div class="v" id="waveProgressLabel">0/0</div>
+          </div>
+          <div class="waveProg" aria-label="Wave progress">
+            <div class="waveFill" id="waveFill"></div>
           </div>
         </div>
 
@@ -268,8 +321,17 @@
       </div>
 
       <div class="right">
+        <button class="btn small pauseBtn" id="pauseBtn" title="Pause">⏸️</button>
         <button class="btn small" id="soundBtn" title="Toggle sound">🔊 Sound</button>
+        <button class="btn small" id="settingsBtn" title="Settings">⚙️</button>
       </div>
+    </div>
+
+    <div id="settingsPanel" class="hidden">
+      <div class="settingRow"><label>Sound</label><div class="toggle" data-setting="sound"><div class="dot"></div></div></div>
+      <div class="settingRow"><label>Vibration</label><div class="toggle" data-setting="vibration"><div class="dot"></div></div></div>
+      <div class="settingRow"><label>Reduce motion</label><div class="toggle" data-setting="motion"><div class="dot"></div></div></div>
+      <button class="btn bad" id="resetProgressSmall" style="width:100%; margin-top:8px">Reset Progress</button>
     </div>
 
     <!-- Start / Game Over overlay -->
@@ -301,6 +363,8 @@
               </div>
               <div class="footerActions">
                 <button class="btn primary" id="startBtn">Start</button>
+                <button class="btn" id="resetProgress">Reset Progress</button>
+                <button class="btn" id="openSettingsFromStart">Settings</button>
               </div>
             </div>
             <p class="tiny">
@@ -327,7 +391,7 @@
             <div class="row">
               <div class="meta">
                 <div class="name">Upgrade Damage</div>
-                <div class="desc">Increase tap damage.</div>
+                <div class="desc" id="dmgDesc">Increase tap damage.</div>
               </div>
               <div class="meta" style="text-align:right">
                 <div class="price" id="costDmg">—</div>
@@ -338,7 +402,7 @@
             <div class="row">
               <div class="meta">
                 <div class="name">Upgrade Fire Rate</div>
-                <div class="desc">Shoot faster (reduces cooldown).</div>
+                <div class="desc" id="rateDesc">Shoot faster (reduces cooldown).</div>
               </div>
               <div class="meta" style="text-align:right">
                 <div class="price" id="costRate">—</div>
@@ -349,7 +413,7 @@
             <div class="row">
               <div class="meta">
                 <div class="name">Turret</div>
-                <div class="desc">Auto-shoots nearest zombie from bottom-center.</div>
+                <div class="desc" id="turretDesc">Auto-shoots nearest zombie from bottom-center.</div>
               </div>
               <div class="meta" style="text-align:right">
                 <div class="price" id="costTurret">—</div>
@@ -377,6 +441,64 @@
       </div>
     </div>
 
+    <!-- Pause overlay -->
+    <div id="pauseOverlay" class="overlay hidden">
+      <div class="card">
+        <header>
+          <h2 class="title">Paused</h2>
+          <p class="subtitle">Take a breather.</p>
+        </header>
+        <div class="content">
+          <div class="footerActions">
+            <button class="btn primary" id="resumeBtn">Resume</button>
+            <button class="btn" id="pauseSettings">Settings</button>
+            <button class="btn bad" id="pauseRestart">Restart run</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Continue overlay -->
+    <div id="continueOverlay" class="overlay hidden">
+      <div class="card">
+        <header>
+          <h2 class="title">You were overwhelmed</h2>
+          <p class="subtitle" id="summarySubtitle">Choose: revive or restart.</p>
+        </header>
+        <div class="content">
+          <div class="row">
+            <div class="meta">
+              <div class="name">Wave reached</div>
+              <div class="desc" id="summaryWave">0</div>
+            </div>
+            <div class="meta">
+              <div class="name">Score</div>
+              <div class="desc" id="summaryScore">0</div>
+            </div>
+            <div class="meta">
+              <div class="name">Total kills</div>
+              <div class="desc" id="summaryKills">0</div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="meta">
+              <div class="name">Best</div>
+              <div class="desc" id="summaryBest">0</div>
+            </div>
+            <div class="meta">
+              <div class="name">Bank</div>
+              <div class="desc" id="summaryBank">0</div>
+            </div>
+          </div>
+          <div class="footerActions">
+            <button class="btn primary" id="reviveBtn">Continue (revive)</button>
+            <button class="btn" id="restartWave1">Restart wave 1</button>
+            <button class="btn bad" id="resetFromGameOver">Reset Progress</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div id="toast">Toast</div>
   </div>
 
@@ -399,6 +521,7 @@
 
     const hpLabel = document.getElementById("hpLabel");
     const hpFill  = document.getElementById("hpFill");
+    const hpGhost = document.getElementById("hpGhost");
     const hpPct   = document.getElementById("hpPct");
     const coinLabel = document.getElementById("coinLabel");
     const waveLabel = document.getElementById("waveLabel");
@@ -406,13 +529,43 @@
     const dmgLabel = document.getElementById("dmgLabel");
     const rateLabel = document.getElementById("rateLabel");
     const turretLabel = document.getElementById("turretLabel");
+    const waveFillEl = document.getElementById("waveFill");
+    const waveProgressLabel = document.getElementById("waveProgressLabel");
 
     const soundBtn = document.getElementById("soundBtn");
+    const pauseBtn = document.getElementById("pauseBtn");
+    const settingsBtn = document.getElementById("settingsBtn");
+    const settingsPanel = document.getElementById("settingsPanel");
+    const resetProgressSmall = document.getElementById("resetProgressSmall");
+    const settingsToggles = settingsPanel.querySelectorAll('.toggle');
+
+    function updateSettingsUI(){
+      settingsToggles.forEach(t => {
+        const key = t.dataset.setting;
+        let on = false;
+        if (key === "sound") on = Save.settings.soundOn !== false;
+        if (key === "vibration") on = !!Save.settings.vibrationOn;
+        if (key === "motion") on = !!Save.settings.reduceMotionOn;
+        t.classList.toggle('on', on);
+      });
+    }
+
+    function toggleSettingsPanel(forceOpen=false){
+      const open = forceOpen ? true : settingsPanel.classList.contains("hidden");
+      if (open){
+        updateSettingsUI();
+        settingsPanel.classList.remove("hidden");
+      } else {
+        settingsPanel.classList.add("hidden");
+      }
+    }
 
     const mainOverlay = document.getElementById("mainOverlay");
     const overlayTitle = document.getElementById("overlayTitle");
     const overlayDesc = document.getElementById("overlayDesc");
     const startBtn = document.getElementById("startBtn");
+    const openSettingsFromStart = document.getElementById("openSettingsFromStart");
+    const resetProgressBtn = document.getElementById("resetProgress");
 
     const shopOverlay = document.getElementById("shopOverlay");
     const costDmg = document.getElementById("costDmg");
@@ -424,6 +577,27 @@
     const nextWaveBtn = document.getElementById("nextWaveBtn");
     const restartBtn = document.getElementById("restartBtn");
     const shopStats = document.getElementById("shopStats");
+    const dmgDesc = document.getElementById("dmgDesc");
+    const rateDesc = document.getElementById("rateDesc");
+    const turretDesc = document.getElementById("turretDesc");
+
+    const pauseOverlay = document.getElementById("pauseOverlay");
+    const resumeBtn = document.getElementById("resumeBtn");
+    const pauseSettingsBtn = document.getElementById("pauseSettings");
+    const pauseRestartBtn = document.getElementById("pauseRestart");
+
+    const continueOverlay = document.getElementById("continueOverlay");
+    const reviveBtn = document.getElementById("reviveBtn");
+    const restartWave1Btn = document.getElementById("restartWave1");
+    const resetFromGameOverBtn = document.getElementById("resetFromGameOver");
+    const summaryWave = document.getElementById("summaryWave");
+    const summaryScore = document.getElementById("summaryScore");
+    const summaryKills = document.getElementById("summaryKills");
+    const summaryBest = document.getElementById("summaryBest");
+    const summaryBank = document.getElementById("summaryBank");
+    const summarySubtitle = document.getElementById("summarySubtitle");
+
+    const vignette = document.getElementById("vignette");
 
     const bestWaveLabel = document.getElementById("bestWaveLabel");
     const bestScoreLabel = document.getElementById("bestScoreLabel");
@@ -444,6 +618,59 @@
       showToast._t = setTimeout(() => toastEl.classList.remove("show"), 900);
     }
 
+    // ---------- Save System
+    const SAVE_KEY = "ztd_save_v2";
+    const defaultSave = () => ({
+      coinsBank: 0,
+      dmgLevel: 0,
+      rateLevel: 0,
+      turretLevel: 0,
+      bestWave: 0,
+      bestScore: 0,
+      totalKills: 0,
+      runs: 0,
+      settings: {
+        soundOn: true,
+        vibrationOn: false,
+        reduceMotionOn: false,
+      },
+    });
+
+    function loadSave(){
+      let save = defaultSave();
+      try {
+        const raw = localStorage.getItem(SAVE_KEY);
+        if (raw) Object.assign(save, JSON.parse(raw));
+      } catch (e) {}
+
+      // migrate old bests
+      const oldWave = +localStorage.getItem("ztd_bestWave") || 0;
+      const oldScore = +localStorage.getItem("ztd_bestScore") || 0;
+      save.bestWave = Math.max(save.bestWave || 0, oldWave);
+      save.bestScore = Math.max(save.bestScore || 0, oldScore);
+      persistSave(save);
+      return save;
+    }
+
+    function persistSave(s=Save){
+      localStorage.setItem(SAVE_KEY, JSON.stringify(s));
+    }
+
+    function resetProgress(){
+      localStorage.removeItem(SAVE_KEY);
+      localStorage.removeItem("ztd_bestWave");
+      localStorage.removeItem("ztd_bestScore");
+      Save = loadSave();
+      applySaveToPlayer();
+      updateHUD();
+      setStartOverlay();
+      showToast("Progress reset");
+      continueOverlay.classList.add("hidden");
+      pauseOverlay.classList.add("hidden");
+    }
+
+    let Save = loadSave();
+
     // ---------- Optional assets (images + sounds)
     const Assets = {
       zombieSheet: null,
@@ -451,6 +678,23 @@
       blood: null,
       bloodOk: false,
     };
+
+    function colorKeyToCanvas(img, tolerance=18){
+      const c = document.createElement('canvas');
+      c.width = img.width; c.height = img.height;
+      const g = c.getContext('2d');
+      g.drawImage(img,0,0);
+      const data = g.getImageData(0,0,c.width,c.height);
+      const d = data.data;
+      const r0=d[0], g0=d[1], b0=d[2];
+      const tol = tolerance*3;
+      for (let i=0;i<d.length;i+=4){
+        const dr=Math.abs(d[i]-r0)+Math.abs(d[i+1]-g0)+Math.abs(d[i+2]-b0);
+        if (dr < tol) d[i+3]=0;
+      }
+      g.putImageData(data,0,0);
+      return c;
+    }
 
     function loadImage(url) {
       return new Promise((resolve) => {
@@ -466,8 +710,8 @@
       loadImage("assets/zombie_sheet.png"),
       loadImage("assets/blood.png"),
     ]).then(([zs, bl]) => {
-      if (zs.ok) { Assets.zombieSheet = zs.img; Assets.zombieSheetOk = true; }
-      if (bl.ok) { Assets.blood = bl.img; Assets.bloodOk = true; }
+      if (zs.ok) { Assets.zombieSheet = colorKeyToCanvas(zs.img); Assets.zombieSheetOk = true; }
+      if (bl.ok) { Assets.blood = colorKeyToCanvas(bl.img); Assets.bloodOk = true; }
     });
 
     // ---------- Sound manager (WebAudio with unlock + optional file buffers)
@@ -490,7 +734,9 @@
       function setEnabled(v) {
         enabled = !!v;
         soundBtn.textContent = enabled ? "🔊 Sound" : "🔇 Muted";
-        localStorage.setItem("ztd_sound", enabled ? "1" : "0");
+        Save.settings.soundOn = enabled;
+        persistSave();
+        updateSettingsUI();
       }
 
       function getEnabled() { return enabled; }
@@ -569,8 +815,7 @@
       }
 
       // Load persisted sound setting
-      const saved = localStorage.getItem("ztd_sound");
-      if (saved === "0") enabled = false;
+      if (Save.settings && Save.settings.soundOn === false) enabled = false;
 
       setEnabled(enabled);
 
@@ -579,18 +824,24 @@
 
     // ---------- Game state
     const State = {
-      mode: "start", // start | playing | shop | gameover
+      mode: "start", // start | playing | shop | gameover | paused
       w: 0, h: 0, dpr: 1,
       time: 0,
       lastT: nowMs(),
       shakeT: 0,
       shakeMag: 0,
       damageFlash: 0,
+      hpSmooth: 100,
+      hpGhost: 100,
+      hitStop: 0,
+      invulnUntil: 0,
+      paused: false,
+      reduceMotion: !!Save.settings.reduceMotionOn,
     };
 
     const Player = {
-      maxHp: 100,
-      hp: 100,
+      maxHp: 120,
+      hp: 120,
       coins: 0,
       score: 0,
       kills: 0,
@@ -608,6 +859,23 @@
       turretLastShotAt: -1e9,
     };
 
+    function recalcFromLevels(){
+      Player.tapDamage = 1 + Player.dmgLevel;
+      const base = 320;
+      Player.tapCooldownMs = clamp(base * Math.pow(0.90, Player.rateLevel), 80, 320);
+      Player.turretCooldownMs = clamp(900 * Math.pow(0.92, Math.max(0, Player.turretLevel-1)), 240, 900);
+    }
+
+    function applySaveToPlayer(){
+      Player.coins = Save.coinsBank || 0;
+      Player.dmgLevel = Save.dmgLevel || 0;
+      Player.rateLevel = Save.rateLevel || 0;
+      Player.turretLevel = Save.turretLevel || 0;
+      recalcFromLevels();
+    }
+
+    const Combo = { value:0, timer:0 };
+
     const Wave = {
       num: 0,
       toSpawn: 0,
@@ -618,13 +886,14 @@
       active: false,
     };
 
-    // Best stats (localStorage)
-    const Best = {
-      wave: +localStorage.getItem("ztd_bestWave") || 0,
-      score: +localStorage.getItem("ztd_bestScore") || 0,
-    };
-    bestWaveLabel.textContent = String(Best.wave);
-    bestScoreLabel.textContent = String(Best.score);
+    function updateBestLabels(){
+      bestWaveLabel.textContent = String(Save.bestWave || 0);
+      bestScoreLabel.textContent = String(Save.bestScore || 0);
+    }
+    updateBestLabels();
+    applySaveToPlayer();
+    State.hpSmooth = Player.hp;
+    State.hpGhost = Player.hp;
 
     // ---------- Zombie types
     const ZOMBIE_TYPES = {
@@ -675,11 +944,44 @@
       idx: 0,
     };
 
+    // Floating texts
+    const FT_MAX = 48;
+    const FT = Array.from({length:FT_MAX}, () => ({x:0,y:0,text:"",life:0,max:0,color:"#fff",vy:-28}));
+    let ftIdx = 0;
+
+    // Impact rings
+    const R_MAX = 32;
+    const Rings = {x:new Float32Array(R_MAX), y:new Float32Array(R_MAX), life:new Float32Array(R_MAX), max:new Float32Array(R_MAX), r:new Float32Array(R_MAX)};
+    let ringIdx=0;
+
+    // Tap reticles
+    const RET_MAX = 16;
+    const Ret = {x:new Float32Array(RET_MAX), y:new Float32Array(RET_MAX), life:new Float32Array(RET_MAX), max:new Float32Array(RET_MAX)};
+    let retIdx=0;
+
     function addTrace(x1,y1,x2,y2,ttl=0.08){
       const i = Trace.idx;
       Trace.x1[i]=x1; Trace.y1[i]=y1; Trace.x2[i]=x2; Trace.y2[i]=y2;
       Trace.life[i]=ttl; Trace.max[i]=ttl;
       Trace.idx = (Trace.idx+1) % T_MAX;
+    }
+
+    function addFloatingText(x,y,text,color="#fff",life=0.9,vy=-22){
+      const ft = FT[ftIdx];
+      ft.x = x; ft.y = y; ft.text = text; ft.color = color; ft.life = life; ft.max = life; ft.vy = vy;
+      ftIdx = (ftIdx+1) % FT_MAX;
+    }
+
+    function addRing(x,y,r=8,life=0.2){
+      const i = ringIdx;
+      Rings.x[i]=x; Rings.y[i]=y; Rings.r[i]=r; Rings.life[i]=life; Rings.max[i]=life;
+      ringIdx = (ringIdx+1) % R_MAX;
+    }
+
+    function addReticle(x,y){
+      const i = retIdx;
+      Ret.x[i]=x; Ret.y[i]=y; Ret.max[i]=0.35; Ret.life[i]=0.35;
+      retIdx = (retIdx+1) % RET_MAX;
     }
 
     function addDecal(x,y){
@@ -731,6 +1033,7 @@
 
     // ---------- Input (pointer events, forgiving hit detection)
     let pointerDown = false;
+    const pointerPos = {x:0,y:0};
 
     function canvasPointFromEvent(e){
       const r = canvas.getBoundingClientRect();
@@ -745,6 +1048,7 @@
       if (t - Player.lastTapShotAt < Player.tapCooldownMs) return;
 
       Player.lastTapShotAt = t;
+      addReticle(x,y);
 
       // Find closest zombie within forgiving radius
       let hitIdx = -1;
@@ -767,6 +1071,7 @@
         Sound.play("hit"); // subtle "pew" even on miss? feels responsive
         // small spark particles (cheaper than separate pool)
         spawnParticles(x,y,6,90);
+        addRing(x,y,10,0.25);
         return;
       }
 
@@ -774,8 +1079,10 @@
       const z = zombies[hitIdx];
       z.hp -= Player.tapDamage;
       z.hitT = 0.12;
+      addRing(z.x, z.y, 12, 0.25);
+      State.hitStop = State.reduceMotion ? 0 : 0.025;
       Sound.play("hit");
-      spawnParticles(x,y,10,130);
+      spawnParticles(x,y,12,140);
 
       if (z.hp <= 0) {
         // Kill
@@ -788,12 +1095,25 @@
       const z = zombies[index];
 
       Player.kills++;
-      Player.coins += z.coin;
-      // Score: coins + kills weight + wave weight
-      Player.score = Math.floor(Player.coins + Player.kills*8 + Wave.num*25);
+      Save.totalKills++;
+      addCoins(z.coin, z.x, z.y);
+      addFloatingText(z.x, z.y-10, `+${z.coin}c`, "#facc15", 1.0, -24);
+
+      addCombo();
+      const comboMult = 1 + Combo.value * 0.1;
+      const bonus = Math.floor((10 + Wave.num * 3) * comboMult) + z.coin;
+      Player.score += bonus;
+      Save.bestScore = Math.max(Save.bestScore, Player.score);
+      persistSave();
 
       // Big blood pop
-      spawnParticles(z.x, z.y, randi(20, 34), 240);
+      spawnParticles(z.x, z.y, randi(26, 36), 260);
+      spawnParticles(z.x, z.y, 12, 90);
+      addRing(z.x, z.y, 20, 0.35);
+      State.hitStop = State.reduceMotion ? 0 : 0.055;
+      State.shakeT = 0.18; State.shakeMag = 12;
+      if (State.reduceMotion) State.shakeMag *= 0.5;
+      if (navigator.vibrate && Save.settings.vibrationOn) navigator.vibrate(12);
 
       if (Assets.bloodOk) {
         addDecal(z.x, z.y);
@@ -807,10 +1127,15 @@
 
     function applyPlayerDamage(amount){
       if (amount <= 0) return;
+      if (nowMs() < State.invulnUntil) return;
       Player.hp = Math.max(0, Player.hp - amount);
       State.shakeT = 0.18;
       State.shakeMag = 9 + amount * 0.22;
-      State.damageFlash = 0.22;
+      State.damageFlash = 0.35;
+      if (State.reduceMotion) { State.shakeMag *= 0.5; State.damageFlash *= 0.6; }
+      vignette.style.opacity = "0.32";
+      resetCombo();
+      if (navigator.vibrate && Save.settings.vibrationOn) navigator.vibrate([20,30,20]);
       Sound.play("hurt");
 
       if (Player.hp <= 0) {
@@ -829,6 +1154,9 @@
       pointerDown = true;
       canvas.setPointerCapture?.(e.pointerId);
 
+      const p = canvasPointFromEvent(e);
+      pointerPos.x = p.x; pointerPos.y = p.y;
+
       // First interaction unlocks audio (iOS/Android requirement)
       Sound.unlock();
 
@@ -836,18 +1164,18 @@
         startGame();
         return;
       }
-      if (State.mode === "gameover") {
-        startGame();
-        return;
-      }
       if (State.mode !== "playing") return;
 
-      const p = canvasPointFromEvent(e);
       tryShootAt(p.x, p.y);
     });
 
     canvas.addEventListener("pointerup", () => { pointerDown = false; });
     canvas.addEventListener("pointercancel", () => { pointerDown = false; });
+    canvas.addEventListener("pointermove", (e) => {
+      if (!pointerDown) return;
+      const p = canvasPointFromEvent(e);
+      pointerPos.x = p.x; pointerPos.y = p.y;
+    });
 
     // ---------- UI buttons
     soundBtn.addEventListener("click", () => {
@@ -856,11 +1184,53 @@
       Sound.play("ui");
     });
 
+    settingsToggles.forEach(t => {
+      t.addEventListener("click", () => {
+        const key = t.dataset.setting;
+        if (key === "sound") Sound.setEnabled(!Sound.getEnabled());
+        if (key === "vibration") { Save.settings.vibrationOn = !Save.settings.vibrationOn; persistSave(); }
+        if (key === "motion") { Save.settings.reduceMotionOn = !Save.settings.reduceMotionOn; State.reduceMotion = !!Save.settings.reduceMotionOn; persistSave(); }
+        updateSettingsUI();
+      });
+    });
+
+    pauseBtn.addEventListener("click", () => {
+      if (State.mode !== "playing") return;
+      State.paused = true;
+      State.mode = "paused";
+      pauseOverlay.classList.remove("hidden");
+      Sound.play("ui");
+    });
+
+    resumeBtn.addEventListener("click", () => {
+      if (State.mode !== "paused") return;
+      State.paused = false;
+      State.mode = "playing";
+      pauseOverlay.classList.add("hidden");
+      Sound.play("ui");
+    });
+
+    pauseRestartBtn.addEventListener("click", () => {
+      Sound.play("ui");
+      startGame();
+    });
+
+    pauseSettingsBtn.addEventListener("click", () => {
+      toggleSettingsPanel();
+    });
+
+    settingsBtn.addEventListener("click", () => { toggleSettingsPanel(); });
+
     startBtn.addEventListener("click", () => {
       Sound.unlock();
       Sound.play("ui");
       startGame();
     });
+
+    resetProgressBtn.addEventListener("click", () => { Sound.play("ui"); resetProgress(); });
+    resetProgressSmall.addEventListener("click", () => { Sound.play("ui"); resetProgress(); });
+    resetFromGameOverBtn.addEventListener("click", () => { Sound.play("ui"); resetProgress(); });
+    openSettingsFromStart.addEventListener("click", () => { toggleSettingsPanel(true); });
 
     restartBtn.addEventListener("click", () => {
       Sound.play("ui");
@@ -872,13 +1242,17 @@
       closeShopAndStartWave();
     });
 
+    reviveBtn.addEventListener("click", () => { Sound.play("ui"); revivePlayer(); });
+    restartWave1Btn.addEventListener("click", () => { Sound.play("ui"); startGame(); });
+
     buyDmg.addEventListener("click", () => {
       Sound.play("ui");
       const c = costDamage();
-      if (Player.coins < c) return showToast("Not enough coins");
-      Player.coins -= c;
+      if (!spendCoins(c)) return showToast("Not enough coins");
       Player.dmgLevel++;
-      Player.tapDamage = 1 + Player.dmgLevel; // simple, punchy
+      Save.dmgLevel = Player.dmgLevel;
+      recalcFromLevels();
+      persistSave();
       showToast("Damage upgraded");
       updateShopUI();
     });
@@ -886,13 +1260,11 @@
     buyRate.addEventListener("click", () => {
       Sound.play("ui");
       const c = costRateUp();
-      if (Player.coins < c) return showToast("Not enough coins");
-      Player.coins -= c;
+      if (!spendCoins(c)) return showToast("Not enough coins");
       Player.rateLevel++;
-      // Reduce cooldown with diminishing returns
-      const base = 300;
-      const mult = Math.pow(0.90, Player.rateLevel);
-      Player.tapCooldownMs = clamp(base * mult, 85, 300);
+      Save.rateLevel = Player.rateLevel;
+      recalcFromLevels();
+      persistSave();
       showToast("Fire rate upgraded");
       updateShopUI();
     });
@@ -900,12 +1272,11 @@
     buyTurret.addEventListener("click", () => {
       Sound.play("ui");
       const c = costTurretUp();
-      if (Player.coins < c) return showToast("Not enough coins");
-      Player.coins -= c;
+      if (!spendCoins(c)) return showToast("Not enough coins");
       Player.turretLevel++;
-      // Turret gets faster, and hits harder
-      const base = 900;
-      Player.turretCooldownMs = clamp(base * Math.pow(0.90, Player.turretLevel-1), 260, 900);
+      Save.turretLevel = Player.turretLevel;
+      recalcFromLevels();
+      persistSave();
       showToast(Player.turretLevel === 1 ? "Turret installed" : "Turret upgraded");
       updateShopUI();
     });
@@ -924,24 +1295,49 @@
       return Math.floor(base * Math.pow(1.60, lvl));
     }
 
+    function spendCoins(cost){
+      if (Player.coins < cost) return false;
+      Player.coins -= cost;
+      Save.coinsBank = Player.coins;
+      persistSave();
+      return true;
+    }
+
+    function addCoins(amount,x=State.w*0.5,y=State.h*0.5){
+      if (!amount) return;
+      Player.coins += amount;
+      Save.coinsBank = Player.coins;
+      persistSave();
+      addFloatingText(x,y,`+${amount}🪙`,`#facc15`,0.9,-26);
+    }
+
+    function addCombo(){
+      Combo.timer = 1.8;
+      Combo.value = Math.min(50, Combo.value + 1);
+      addFloatingText(State.w-40, 60, `COMBO x${Combo.value}`, "#a855f7", 0.8, -12);
+    }
+
+    function resetCombo(){
+      Combo.value = 0; Combo.timer = 0;
+    }
+
     // ---------- Game flow
     function resetAll(){
       zombies.length = 0;
       Player.hp = Player.maxHp;
-      Player.coins = 0;
       Player.score = 0;
       Player.kills = 0;
       Player.misses = 0;
 
-      Player.tapDamage = 1;
-      Player.tapCooldownMs = 300;
       Player.lastTapShotAt = -1e9;
-      Player.dmgLevel = 0;
-      Player.rateLevel = 0;
-
-      Player.turretLevel = 0;
-      Player.turretCooldownMs = 900;
       Player.turretLastShotAt = -1e9;
+      Player.coins = Save.coinsBank;
+      recalcFromLevels();
+      Combo.value = 0; Combo.timer = 0;
+      State.invulnUntil = 0;
+      State.hpSmooth = Player.hp;
+      State.hpGhost = Player.hp;
+      vignette.style.opacity = "0";
 
       Wave.num = 0;
       Wave.active = false;
@@ -965,30 +1361,55 @@
 
     function startGame(){
       resetAll();
+      Save.runs = (Save.runs||0)+1;
+      persistSave();
       State.mode = "playing";
+      State.paused = false;
       mainOverlay.classList.add("hidden");
       shopOverlay.classList.add("hidden");
+      continueOverlay.classList.add("hidden");
+      pauseOverlay.classList.add("hidden");
       startNextWave();
+      updateHUD();
+    }
+
+    function revivePrice(){
+      return Math.max(50, 100 + Wave.num * 20);
+    }
+
+    function revivePlayer(){
+      const cost = revivePrice();
+      if (!spendCoins(cost)) return showToast("Not enough bank");
+      Player.hp = Math.floor(Player.maxHp * 0.5);
+      State.invulnUntil = nowMs() + 1500;
+      zombies.length = 0;
+      Wave.spawned = 0;
+      Wave.active = true;
+      Wave.toSpawn = Math.max(3, Math.floor(Wave.toSpawn * 0.7));
+      Wave.nextSpawnAt = nowMs() + 450;
+      continueOverlay.classList.add("hidden");
+      State.mode = "playing";
       updateHUD();
     }
 
     function gameOver(){
       State.mode = "gameover";
       Wave.active = false;
+      Save.bestWave = Math.max(Save.bestWave || 0, Wave.num);
+      Save.bestScore = Math.max(Save.bestScore || 0, Player.score);
+      persistSave();
+      updateBestLabels();
 
-      // Update bests
-      if (Wave.num > Best.wave) Best.wave = Wave.num;
-      if (Player.score > Best.score) Best.score = Player.score;
-      localStorage.setItem("ztd_bestWave", String(Best.wave));
-      localStorage.setItem("ztd_bestScore", String(Best.score));
-
-      bestWaveLabel.textContent = String(Best.wave);
-      bestScoreLabel.textContent = String(Best.score);
-
-      overlayTitle.textContent = "Game over";
-      overlayDesc.innerHTML = `You reached <b>Wave ${Wave.num}</b> · Score <b>${Player.score}</b>.<br>Tap Start to try again.`;
-      startBtn.textContent = "Restart";
-      mainOverlay.classList.remove("hidden");
+      summaryWave.textContent = Wave.num;
+      summaryScore.textContent = Player.score;
+      summaryKills.textContent = Player.kills;
+      summaryBest.textContent = `Wave ${Save.bestWave} · Score ${Save.bestScore}`;
+      summaryBank.textContent = Player.coins;
+      const reviveCost = revivePrice();
+      summarySubtitle.textContent = `Revive for ${reviveCost} banked coins or restart from wave 1.`;
+      reviveBtn.textContent = `Continue (Revive -${reviveCost})`;
+      continueOverlay.classList.remove("hidden");
+      mainOverlay.classList.add("hidden");
     }
 
     function startNextWave(){
@@ -996,11 +1417,11 @@
       Wave.active = true;
 
       const w = Wave.num;
-      Wave.toSpawn = Math.floor(6 + w * 3.2);
+      Wave.toSpawn = Math.floor(5 + w * 2.6);
       Wave.spawned = 0;
 
       // Faster spawn at higher waves
-      Wave.spawnEveryMs = clamp(720 - w * 24, 260, 720);
+      Wave.spawnEveryMs = clamp(760 - w * 20, 260, 760);
       Wave.nextSpawnAt = nowMs() + 350;
 
       // Reward a tiny “breather” after shop
@@ -1012,6 +1433,7 @@
       Wave.active = false;
       Wave.clearedAt = nowMs();
       State.mode = "shop";
+      if (Wave.num > (Save.bestWave||0)) { Save.bestWave = Wave.num; persistSave(); updateBestLabels(); }
       openShop();
     }
 
@@ -1029,7 +1451,7 @@
     function updateShopUI(){
       costDmg.textContent = `Cost: ${costDamage()} coins`;
       costRate.textContent = `Cost: ${costRateUp()} coins`;
-      costTurret.textContent = `Cost: ${costTurretUp()} coins`;
+      costTurret.textContent = Player.turretLevel === 0 ? `Cost: ${costTurretUp()} (install)` : `Cost: ${costTurretUp()} coins`;
 
       buyDmg.disabled = Player.coins < costDamage();
       buyRate.disabled = Player.coins < costRateUp();
@@ -1039,10 +1461,15 @@
       buyRate.style.opacity = buyRate.disabled ? 0.55 : 1;
       buyTurret.style.opacity = buyTurret.disabled ? 0.55 : 1;
 
+      dmgDesc.textContent = `+1 tap dmg (Lv ${Player.dmgLevel})`;
+      rateDesc.textContent = `Shoot ${(1000/Player.tapCooldownMs).toFixed(1)}/s → ${(1000/Math.max(80, Player.tapCooldownMs*0.9)).toFixed(1)}/s`;
+      const nextTurretCd = clamp(Player.turretCooldownMs * 0.92, 240, 900);
+      turretDesc.textContent = Player.turretLevel === 0 ? "Install an auto turret" : `Fire ${(1000/Player.turretCooldownMs).toFixed(1)}/s → ${(1000/nextTurretCd).toFixed(1)}/s`;
+
       const ratePerSec = (1000 / Player.tapCooldownMs).toFixed(1);
       const turretTxt = Player.turretLevel === 0 ? "none" : `Lv ${Player.turretLevel}`;
       shopStats.textContent =
-        `Coins ${Player.coins} · Tap dmg ${Player.tapDamage} · Fire ${ratePerSec}/s · Turret ${turretTxt}`;
+        `Bank ${Player.coins} · Tap dmg ${Player.tapDamage} · Fire ${ratePerSec}/s · Turret ${turretTxt}`;
       updateHUD();
     }
 
@@ -1058,11 +1485,13 @@
     }
 
     function spawnZombie(){
-      const typeKey = chooseZombieType(Wave.num);
+      let typeKey = chooseZombieType(Wave.num);
+      const isElite = (Wave.num > 0 && Wave.num % 5 === 0 && Wave.spawned === 0);
+      if (isElite) typeKey = "tank";
       const base = ZOMBIE_TYPES[typeKey];
 
-      const speedScale = 1 + Wave.num * 0.045;  // slightly faster each wave
-      const hpScale    = 1 + Wave.num * (typeKey === "tank" ? 0.14 : 0.10);
+      const speedScale = 1 + Wave.num * 0.040;  // slightly faster each wave
+      const hpScale    = (1 + Wave.num * (typeKey === "tank" ? 0.12 : 0.09)) * (isElite ? 1.65 : 1);
 
       const margin = 26;
       const x = rand(margin, State.w - margin);
@@ -1074,8 +1503,9 @@
         r: base.r,
         maxHp: Math.ceil(base.hp * hpScale),
         hp: 0,
-        coin: base.coin + Math.floor(Wave.num * 0.20),
-        passDmg: base.passDmg + Math.floor(Wave.num * 0.15),
+        coin: base.coin + Math.floor(Wave.num * 0.25) + (isElite ? 12 : 0),
+        passDmg: base.passDmg + Math.floor(Wave.num * 0.12) + (isElite ? 8 : 0),
+        elite: isElite,
 
         // animation
         t: rand(0, 10),
@@ -1134,6 +1564,7 @@
       z.hp -= dmg;
       z.hitT = 0.10;
       spawnParticles(z.x, z.y, 8, 120);
+      addRing(z.x, z.y, 10, 0.2);
       Sound.play("hit");
 
       if (z.hp <= 0) {
@@ -1145,17 +1576,28 @@
     // ---------- HUD updates
     function updateHUD(){
       hpLabel.textContent = fmt(Player.hp);
-      const pct = (Player.hp / Player.maxHp) * 100;
-      hpFill.style.transform = `scaleX(${clamp(pct/100, 0, 1)})`;
-      hpPct.textContent = `${fmt(pct)}%`;
+      const pct = clamp(Player.hp / Player.maxHp, 0, 1);
+      const pctSmooth = clamp(State.hpSmooth / Player.maxHp, 0, 1);
+      const pctGhost = clamp(State.hpGhost / Player.maxHp, 0, 1);
+      hpFill.style.transform = `scaleX(${pctSmooth})`;
+      hpGhost.style.transform = `scaleX(${pctGhost})`;
+      hpPct.textContent = `${fmt(pct*100)}%`;
+      hpFill.style.background = pct < 0.25 ? "linear-gradient(90deg, rgba(239,68,68,.95), rgba(248,113,113,.65))" : pct < 0.5 ? "linear-gradient(90deg, rgba(245,158,11,.95), rgba(251,191,36,.65))" : "linear-gradient(90deg, rgba(34,197,94,.95), rgba(34,197,94,.55))";
+      vignette.style.opacity = pct < 0.35 ? lerp(0.2, 0.55, 1-pct) : "0";
 
       coinLabel.textContent = fmt(Player.coins);
       waveLabel.textContent = fmt(Wave.num);
       scoreLabel.textContent = fmt(Player.score);
 
-      dmgLabel.textContent = fmt(Player.tapDamage);
-      rateLabel.textContent = `${(1000/Player.tapCooldownMs).toFixed(1)}/s`;
+      dmgLabel.textContent = `${fmt(Player.tapDamage)} (Lv ${Player.dmgLevel})`;
+      rateLabel.textContent = `${(1000/Player.tapCooldownMs).toFixed(1)}/s (Lv ${Player.rateLevel})`;
       turretLabel.textContent = Player.turretLevel ? `Lv ${Player.turretLevel}` : "—";
+
+      const totalWave = Math.max(Wave.toSpawn, 1);
+      const remaining = zombies.length + Math.max(0, Wave.toSpawn - Wave.spawned);
+      const progress = clamp(1 - (remaining / totalWave), 0, 1);
+      waveFillEl.style.width = `${progress*100}%`;
+      waveProgressLabel.textContent = `${Math.max(0, totalWave-remaining)}/${totalWave}`;
     }
 
     // ---------- Rendering helpers
@@ -1192,6 +1634,14 @@
       ctx.beginPath();
       ctx.ellipse(0, r*1.25, r*0.9, r*0.35, 0, 0, Math.PI*2);
       ctx.fill();
+
+      if (z.elite) {
+        ctx.strokeStyle = "rgba(250,204,21,.9)";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(0, 0, r*1.15, 0, Math.PI*2);
+        ctx.stroke();
+      }
 
       // legs swing
       const swing = Math.sin(z.step) * (isTank ? 0.22 : isRunner ? 0.55 : 0.38);
@@ -1302,6 +1752,14 @@
       ctx.ellipse(0, z.r*1.3, z.r*0.95, z.r*0.38, 0, 0, Math.PI*2);
       ctx.fill();
 
+      if (z.elite) {
+        ctx.strokeStyle = "rgba(250,204,21,.85)";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(0, 0, z.r*1.2, 0, Math.PI*2);
+        ctx.stroke();
+      }
+
       // image
       ctx.globalAlpha = 0.98;
       ctx.drawImage(img, f*fw, 0, fw, fh, -size/2, -size/2, size, size);
@@ -1375,7 +1833,24 @@
       if (State.shakeT > 0) State.shakeT = Math.max(0, State.shakeT - dt);
       if (State.damageFlash > 0) State.damageFlash = Math.max(0, State.damageFlash - dt);
 
-      if (State.mode !== "playing") return;
+      if (State.hitStop > 0){
+        State.hitStop = Math.max(0, State.hitStop - dt);
+        return;
+      }
+
+      State.hpSmooth = lerp(State.hpSmooth, Player.hp, dt * 8);
+      State.hpGhost = lerp(State.hpGhost, Player.hp, dt * 2.5);
+      if (Combo.timer > 0){
+        Combo.timer -= dt;
+        if (Combo.timer <= 0) resetCombo();
+      }
+
+      if (State.mode !== "playing") { updateHUD(); return; }
+      if (State.paused) return;
+
+      if (pointerDown) {
+        if (zombies.length) tryShootAt(pointerPos.x, pointerPos.y);
+      }
 
       // Spawn logic
       const t = nowMs();
@@ -1458,6 +1933,26 @@
       for (let i=0;i<T_MAX;i++){
         if (Trace.life[i] <= 0) continue;
         Trace.life[i] -= dt;
+      }
+
+      // Floating text
+      for (let i=0;i<FT_MAX;i++){
+        const ft = FT[i];
+        if (ft.life <= 0) continue;
+        ft.life -= dt;
+        ft.y += ft.vy * dt;
+      }
+
+      // Rings
+      for (let i=0;i<R_MAX;i++){
+        if (Rings.life[i] <= 0) continue;
+        Rings.life[i] -= dt;
+      }
+
+      // Reticles
+      for (let i=0;i<RET_MAX;i++){
+        if (Ret.life[i] <= 0) continue;
+        Ret.life[i] -= dt;
       }
     }
 
@@ -1551,6 +2046,46 @@
       }
       ctx.globalAlpha = 1;
 
+      // Rings
+      for (let i=0;i<R_MAX;i++){
+        const life = Rings.life[i];
+        if (life <= 0) continue;
+        const t = clamp(life / Rings.max[i], 0, 1);
+        ctx.globalAlpha = t*0.5;
+        ctx.strokeStyle = `rgba(255,255,255,${0.6*t})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(Rings.x[i], Rings.y[i], Rings.r[i]*(1+(1-t)*1.4), 0, Math.PI*2);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+
+      // Tap reticles
+      for (let i=0;i<RET_MAX;i++){
+        const life = Ret.life[i];
+        if (life <= 0) continue;
+        const t = clamp(life / Ret.max[i], 0, 1);
+        ctx.globalAlpha = t*0.6;
+        ctx.strokeStyle = "rgba(139,92,246,.7)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(Ret.x[i], Ret.y[i], 18*(1-t), 0, Math.PI*2);
+        ctx.stroke();
+      }
+
+      // Floating text
+      ctx.font = "700 14px ui-sans-serif, system-ui";
+      ctx.textAlign = "center";
+      for (let i=0;i<FT_MAX;i++){
+        const ft = FT[i];
+        if (ft.life <= 0) continue;
+        const t = clamp(ft.life / ft.max, 0, 1);
+        ctx.globalAlpha = t;
+        ctx.fillStyle = ft.color;
+        ctx.fillText(ft.text, ft.x, ft.y);
+      }
+      ctx.globalAlpha = 1;
+
       ctx.restore();
 
       // Damage flash overlay (no transform)
@@ -1590,7 +2125,7 @@
     // ---------- Start / Shop UI setup text
     function setStartOverlay(){
       overlayTitle.textContent = "Tap to start";
-      overlayDesc.textContent = "Your first tap will also unlock audio on mobile. Survive as many waves as you can.";
+      overlayDesc.innerHTML = `Your first tap will also unlock audio on mobile. Survive as many waves as you can.<br>Banked coins: <b>${Save.coinsBank}</b> · Upgrades: dmg ${Save.dmgLevel}, rate ${Save.rateLevel}, turret ${Save.turretLevel}`;
       startBtn.textContent = "Start";
       mainOverlay.classList.remove("hidden");
       shopOverlay.classList.add("hidden");
@@ -1607,10 +2142,7 @@
       resize();
       setStartOverlay();
       updateHUD();
-
-      // Update best labels
-      bestWaveLabel.textContent = String(Best.wave);
-      bestScoreLabel.textContent = String(Best.score);
+      updateSettingsUI();
 
       // Keep canvas properly sized
       // (call once more after layout settles)
