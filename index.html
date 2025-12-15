@@ -1,0 +1,1626 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Zombie Tap Defense</title>
+  <style>
+    :root{
+      --bg:#0b0d12;
+      --panel:rgba(18,22,32,.86);
+      --panel2:rgba(12,14,20,.78);
+      --text:#e7eaf0;
+      --muted:#9aa3b2;
+      --accent:#8b5cf6;
+      --good:#22c55e;
+      --bad:#ef4444;
+      --line:rgba(255,255,255,.08);
+      --shadow:0 12px 30px rgba(0,0,0,.35);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      background: radial-gradient(1200px 800px at 50% -10%, rgba(139,92,246,.18), transparent 60%),
+                  radial-gradient(900px 700px at 90% 20%, rgba(34,197,94,.12), transparent 55%),
+                  var(--bg);
+      color:var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      overflow:hidden;
+      overscroll-behavior:none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    #root{
+      position:fixed; inset:0;
+      display:flex; flex-direction:column;
+      padding-top: env(safe-area-inset-top);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    /* HUD */
+    #hud{
+      position:absolute;
+      left:0; right:0; top:0;
+      display:flex; align-items:center; justify-content:space-between;
+      gap:10px;
+      padding:10px 10px calc(10px + env(safe-area-inset-top));
+      background: linear-gradient(to bottom, rgba(10,12,18,.92), rgba(10,12,18,.55), transparent);
+      pointer-events:none;
+      z-index:10;
+    }
+    #hud .left, #hud .right{
+      display:flex; align-items:center; gap:10px;
+      pointer-events:auto;
+    }
+    .pill{
+      background: var(--panel);
+      border:1px solid var(--line);
+      border-radius:999px;
+      padding:8px 10px;
+      box-shadow: var(--shadow);
+      display:flex; align-items:center; gap:10px;
+      min-height:38px;
+    }
+    .stat{
+      display:flex; flex-direction:column; line-height:1.05;
+      gap:2px;
+    }
+    .stat .k{font-size:11px; color:var(--muted)}
+    .stat .v{font-size:13px; font-weight:700}
+    .divider{width:1px; height:18px; background:var(--line)}
+    .btn{
+      pointer-events:auto;
+      border:1px solid var(--line);
+      background: rgba(255,255,255,.06);
+      color:var(--text);
+      padding:9px 12px;
+      border-radius:12px;
+      font-weight:700;
+      cursor:pointer;
+      user-select:none;
+      box-shadow: 0 8px 18px rgba(0,0,0,.25);
+      transition: transform .08s ease, background .12s ease, border-color .12s ease;
+    }
+    .btn:hover{background: rgba(255,255,255,.09)}
+    .btn:active{transform: translateY(1px) scale(.99)}
+    .btn.primary{
+      background: linear-gradient(135deg, rgba(139,92,246,.85), rgba(139,92,246,.45));
+      border-color: rgba(139,92,246,.55);
+    }
+    .btn.good{
+      background: linear-gradient(135deg, rgba(34,197,94,.8), rgba(34,197,94,.35));
+      border-color: rgba(34,197,94,.5);
+    }
+    .btn.bad{
+      background: linear-gradient(135deg, rgba(239,68,68,.8), rgba(239,68,68,.35));
+      border-color: rgba(239,68,68,.5);
+    }
+    .btn.small{padding:8px 10px; border-radius:999px; font-size:13px}
+
+    /* Health bar */
+    .hpWrap{display:flex; align-items:center; gap:10px}
+    .hpBar{
+      width:160px; height:12px; border-radius:999px;
+      background: rgba(255,255,255,.07);
+      border:1px solid rgba(255,255,255,.09);
+      overflow:hidden;
+      position:relative;
+    }
+    .hpFill{
+      height:100%;
+      width:100%;
+      background: linear-gradient(90deg, rgba(34,197,94,.95), rgba(34,197,94,.55));
+      border-right:1px solid rgba(255,255,255,.18);
+      transform-origin:left center;
+    }
+    .hpText{font-size:12px; color:var(--muted)}
+
+    /* Canvas */
+    #gameCanvas{
+      width:100%;
+      height:100%;
+      display:block;
+      touch-action:none; /* important: pointer events without scroll/zoom */
+      user-select:none;
+      -webkit-user-select:none;
+      background: radial-gradient(900px 700px at 50% 15%, rgba(255,255,255,.06), transparent 55%),
+                  radial-gradient(1000px 750px at 50% 110%, rgba(139,92,246,.08), transparent 60%);
+    }
+
+    /* Overlays */
+    .overlay{
+      position:absolute; inset:0;
+      display:flex; align-items:center; justify-content:center;
+      padding:18px;
+      z-index:30;
+      background: radial-gradient(900px 650px at 50% 30%, rgba(0,0,0,.55), rgba(0,0,0,.72));
+      backdrop-filter: blur(6px);
+    }
+    .hidden{display:none !important}
+    .card{
+      width:min(520px, 100%);
+      background: rgba(14,16,24,.78);
+      border:1px solid rgba(255,255,255,.10);
+      border-radius:18px;
+      box-shadow: 0 22px 60px rgba(0,0,0,.55);
+      overflow:hidden;
+    }
+    .card header{
+      padding:16px 16px 10px 16px;
+      border-bottom:1px solid rgba(255,255,255,.08);
+      background: linear-gradient(180deg, rgba(255,255,255,.04), transparent);
+    }
+    .title{
+      font-size:20px; font-weight:900; margin:0 0 6px 0;
+      letter-spacing:.2px;
+    }
+    .subtitle{margin:0; color:var(--muted); font-size:13px; line-height:1.35}
+    .card .content{padding:14px 16px 16px 16px}
+    .grid{
+      display:grid;
+      grid-template-columns: 1fr;
+      gap:10px;
+    }
+    .row{
+      display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:space-between;
+      padding:10px 10px;
+      border:1px solid rgba(255,255,255,.08);
+      background: rgba(255,255,255,.04);
+      border-radius:14px;
+    }
+    .row .meta{display:flex; flex-direction:column; gap:3px}
+    .row .meta .name{font-weight:900}
+    .row .meta .desc{font-size:12px; color:var(--muted)}
+    .price{font-size:12px; color:var(--muted); font-weight:800}
+    .footerActions{
+      display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap;
+      margin-top:12px;
+    }
+    .tiny{
+      font-size:12px; color:var(--muted); line-height:1.35;
+    }
+    .kbd{
+      display:inline-block;
+      padding:2px 8px;
+      border-radius:999px;
+      border:1px solid rgba(255,255,255,.12);
+      background: rgba(0,0,0,.25);
+      font-weight:800;
+      font-size:11px;
+      color:rgba(255,255,255,.85);
+    }
+
+    /* Small toast */
+    #toast{
+      position:absolute;
+      left:50%; bottom:18px;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,.55);
+      border:1px solid rgba(255,255,255,.10);
+      border-radius:999px;
+      padding:8px 12px;
+      font-weight:800;
+      font-size:13px;
+      color:rgba(255,255,255,.92);
+      box-shadow: 0 12px 28px rgba(0,0,0,.45);
+      opacity:0;
+      pointer-events:none;
+      transition: opacity .2s ease, transform .2s ease;
+      z-index:40;
+    }
+    #toast.show{
+      opacity:1;
+      transform: translateX(-50%) translateY(-2px);
+    }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="hud">
+      <div class="left">
+        <div class="pill hpWrap">
+          <div class="stat">
+            <div class="k">Health</div>
+            <div class="v" id="hpLabel">100</div>
+          </div>
+          <div class="hpBar" aria-label="Health bar">
+            <div class="hpFill" id="hpFill"></div>
+          </div>
+          <div class="hpText" id="hpPct">100%</div>
+        </div>
+
+        <div class="pill">
+          <div class="stat">
+            <div class="k">Coins</div>
+            <div class="v" id="coinLabel">0</div>
+          </div>
+          <div class="divider"></div>
+          <div class="stat">
+            <div class="k">Wave</div>
+            <div class="v" id="waveLabel">0</div>
+          </div>
+          <div class="divider"></div>
+          <div class="stat">
+            <div class="k">Score</div>
+            <div class="v" id="scoreLabel">0</div>
+          </div>
+        </div>
+
+        <div class="pill">
+          <div class="stat">
+            <div class="k">Tap Dmg</div>
+            <div class="v" id="dmgLabel">1</div>
+          </div>
+          <div class="divider"></div>
+          <div class="stat">
+            <div class="k">Fire Rate</div>
+            <div class="v" id="rateLabel">3.3/s</div>
+          </div>
+          <div class="divider"></div>
+          <div class="stat">
+            <div class="k">Turret</div>
+            <div class="v" id="turretLabel">—</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="right">
+        <button class="btn small" id="soundBtn" title="Toggle sound">🔊 Sound</button>
+      </div>
+    </div>
+
+    <!-- Start / Game Over overlay -->
+    <div id="mainOverlay" class="overlay">
+      <div class="card">
+        <header>
+          <h1 class="title">🧟 Zombie Tap Defense</h1>
+          <p class="subtitle">
+            Tap zombies to shoot. Survive waves. Buy upgrades between waves.
+            <br><span class="kbd">Touch / Mouse</span> · <span class="kbd">No build tools</span> · <span class="kbd">GitHub Pages</span>
+          </p>
+        </header>
+        <div class="content">
+          <div class="grid">
+            <div class="row">
+              <div class="meta">
+                <div class="name">Best Wave</div>
+                <div class="desc" id="bestWaveLabel">0</div>
+              </div>
+              <div class="meta">
+                <div class="name">Best Score</div>
+                <div class="desc" id="bestScoreLabel">0</div>
+              </div>
+            </div>
+            <div class="row">
+              <div class="meta">
+                <div class="name" id="overlayTitle">Tap to start</div>
+                <div class="desc" id="overlayDesc">Your first tap will also unlock audio on mobile.</div>
+              </div>
+              <div class="footerActions">
+                <button class="btn primary" id="startBtn">Start</button>
+              </div>
+            </div>
+            <p class="tiny">
+              Assets are optional. If you add them later, put files here:
+              <span class="kbd">/assets/zombie_sheet.png</span> (4 frames),
+              <span class="kbd">/assets/blood.png</span>,
+              <span class="kbd">/assets/hit.wav</span> <span class="kbd">kill.wav</span> <span class="kbd">hurt.wav</span> <span class="kbd">wave.wav</span>.
+              The game still runs fine if they’re missing.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Shop overlay (between waves) -->
+    <div id="shopOverlay" class="overlay hidden">
+      <div class="card">
+        <header>
+          <h2 class="title">🛒 Wave cleared</h2>
+          <p class="subtitle">Spend coins, then start the next wave.</p>
+        </header>
+        <div class="content">
+          <div class="grid">
+            <div class="row">
+              <div class="meta">
+                <div class="name">Upgrade Damage</div>
+                <div class="desc">Increase tap damage.</div>
+              </div>
+              <div class="meta" style="text-align:right">
+                <div class="price" id="costDmg">—</div>
+                <button class="btn primary" id="buyDmg">Buy</button>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="meta">
+                <div class="name">Upgrade Fire Rate</div>
+                <div class="desc">Shoot faster (reduces cooldown).</div>
+              </div>
+              <div class="meta" style="text-align:right">
+                <div class="price" id="costRate">—</div>
+                <button class="btn primary" id="buyRate">Buy</button>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="meta">
+                <div class="name">Turret</div>
+                <div class="desc">Auto-shoots nearest zombie from bottom-center.</div>
+              </div>
+              <div class="meta" style="text-align:right">
+                <div class="price" id="costTurret">—</div>
+                <button class="btn good" id="buyTurret">Buy / Upgrade</button>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="meta">
+                <div class="name">Stats</div>
+                <div class="desc" id="shopStats">—</div>
+              </div>
+              <div class="footerActions">
+                <button class="btn" id="restartBtn">Restart</button>
+                <button class="btn good" id="nextWaveBtn">Start next wave</button>
+              </div>
+            </div>
+
+            <p class="tiny">
+              Tip: hits are forgiving (big tap radius). Runners are fast. Tanks are chunky.
+              If a zombie reaches the bottom edge, you take damage and it disappears.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast">Toast</div>
+  </div>
+
+  <script>
+  (() => {
+    "use strict";
+
+    /* =========================================================
+       Zombie Tap Defense — single-file canvas game
+       - Canvas + vanilla JS
+       - Pointer events (touch + mouse)
+       - HiDPI scaling (devicePixelRatio)
+       - requestAnimationFrame loop
+       - Optional assets with graceful fallback
+       ========================================================= */
+
+    // ---------- DOM
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d", { alpha: true });
+
+    const hpLabel = document.getElementById("hpLabel");
+    const hpFill  = document.getElementById("hpFill");
+    const hpPct   = document.getElementById("hpPct");
+    const coinLabel = document.getElementById("coinLabel");
+    const waveLabel = document.getElementById("waveLabel");
+    const scoreLabel = document.getElementById("scoreLabel");
+    const dmgLabel = document.getElementById("dmgLabel");
+    const rateLabel = document.getElementById("rateLabel");
+    const turretLabel = document.getElementById("turretLabel");
+
+    const soundBtn = document.getElementById("soundBtn");
+
+    const mainOverlay = document.getElementById("mainOverlay");
+    const overlayTitle = document.getElementById("overlayTitle");
+    const overlayDesc = document.getElementById("overlayDesc");
+    const startBtn = document.getElementById("startBtn");
+
+    const shopOverlay = document.getElementById("shopOverlay");
+    const costDmg = document.getElementById("costDmg");
+    const costRate = document.getElementById("costRate");
+    const costTurret = document.getElementById("costTurret");
+    const buyDmg = document.getElementById("buyDmg");
+    const buyRate = document.getElementById("buyRate");
+    const buyTurret = document.getElementById("buyTurret");
+    const nextWaveBtn = document.getElementById("nextWaveBtn");
+    const restartBtn = document.getElementById("restartBtn");
+    const shopStats = document.getElementById("shopStats");
+
+    const bestWaveLabel = document.getElementById("bestWaveLabel");
+    const bestScoreLabel = document.getElementById("bestScoreLabel");
+    const toastEl = document.getElementById("toast");
+
+    // ---------- Utilities
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    const lerp  = (a, b, t) => a + (b - a) * t;
+    const rand  = (a, b) => a + Math.random() * (b - a);
+    const randi = (a, b) => (a + Math.floor(Math.random() * (b - a + 1)));
+    const nowMs = () => performance.now();
+    const fmt = (n) => Math.floor(n).toString();
+
+    function showToast(msg) {
+      toastEl.textContent = msg;
+      toastEl.classList.add("show");
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => toastEl.classList.remove("show"), 900);
+    }
+
+    // ---------- Optional assets (images + sounds)
+    const Assets = {
+      zombieSheet: null,
+      zombieSheetOk: false,
+      blood: null,
+      bloodOk: false,
+    };
+
+    function loadImage(url) {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve({ ok:true, img });
+        img.onerror = () => resolve({ ok:false, img:null });
+        img.src = url;
+      });
+    }
+
+    // Preload optional images (safe even if missing)
+    Promise.all([
+      loadImage("assets/zombie_sheet.png"),
+      loadImage("assets/blood.png"),
+    ]).then(([zs, bl]) => {
+      if (zs.ok) { Assets.zombieSheet = zs.img; Assets.zombieSheetOk = true; }
+      if (bl.ok) { Assets.blood = bl.img; Assets.bloodOk = true; }
+    });
+
+    // ---------- Sound manager (WebAudio with unlock + optional file buffers)
+    const Sound = (() => {
+      let enabled = true;
+      let unlocked = false;
+      let ctxA = null;
+      let master = null;
+      const buffers = new Map();
+
+      // Optional sound files
+      const soundFiles = {
+        hit:  "assets/hit.wav",
+        kill: "assets/kill.wav",
+        hurt: "assets/hurt.wav",
+        wave: "assets/wave.wav",
+        ui:   "assets/ui.wav",
+      };
+
+      function setEnabled(v) {
+        enabled = !!v;
+        soundBtn.textContent = enabled ? "🔊 Sound" : "🔇 Muted";
+        localStorage.setItem("ztd_sound", enabled ? "1" : "0");
+      }
+
+      function getEnabled() { return enabled; }
+
+      async function unlock() {
+        if (unlocked) return;
+        try {
+          ctxA = new (window.AudioContext || window.webkitAudioContext)();
+          master = ctxA.createGain();
+          master.gain.value = 0.55;
+          master.connect(ctxA.destination);
+          await ctxA.resume();
+          unlocked = true;
+
+          // Try loading optional audio buffers (graceful if missing)
+          for (const [name, url] of Object.entries(soundFiles)) {
+            fetch(url).then(r => {
+              if (!r.ok) throw new Error("missing");
+              return r.arrayBuffer();
+            }).then(ab => ctxA.decodeAudioData(ab))
+              .then(buf => buffers.set(name, buf))
+              .catch(() => {/* missing is fine */});
+          }
+        } catch (e) {
+          // If WebAudio fails, just silently disable sound.
+          enabled = false;
+          soundBtn.textContent = "🔇 Muted";
+        }
+      }
+
+      function playBuffer(name, gain = 1) {
+        if (!enabled || !unlocked || !ctxA || !master) return false;
+        const buf = buffers.get(name);
+        if (!buf) return false;
+        const src = ctxA.createBufferSource();
+        const g = ctxA.createGain();
+        g.gain.value = clamp(gain, 0, 2);
+        src.buffer = buf;
+        src.connect(g);
+        g.connect(master);
+        src.start();
+        return true;
+      }
+
+      // Fallback beeps (simple + mobile friendly)
+      function beep({ f=440, dur=0.06, type="square", gain=0.18, slide=0 } = {}) {
+        if (!enabled || !unlocked || !ctxA || !master) return;
+        const o = ctxA.createOscillator();
+        const g = ctxA.createGain();
+        o.type = type;
+        o.frequency.setValueAtTime(f, ctxA.currentTime);
+        if (slide !== 0) {
+          o.frequency.exponentialRampToValueAtTime(Math.max(40, f + slide), ctxA.currentTime + dur);
+        }
+        g.gain.setValueAtTime(0.0001, ctxA.currentTime);
+        g.gain.exponentialRampToValueAtTime(gain, ctxA.currentTime + 0.008);
+        g.gain.exponentialRampToValueAtTime(0.0001, ctxA.currentTime + dur);
+
+        o.connect(g);
+        g.connect(master);
+        o.start();
+        o.stop(ctxA.currentTime + dur + 0.01);
+      }
+
+      function play(name) {
+        if (!enabled) return;
+        // Try asset buffer, else fallback beep
+        const ok = playBuffer(name, 1);
+        if (ok) return;
+
+        if (name === "hit")  beep({ f: 520, dur: 0.04, type:"square", gain:0.12, slide:-80 });
+        if (name === "kill") beep({ f: 220, dur: 0.08, type:"sawtooth", gain:0.16, slide: 240 });
+        if (name === "hurt") beep({ f: 120, dur: 0.10, type:"triangle", gain:0.20, slide:-30 });
+        if (name === "wave") beep({ f: 660, dur: 0.12, type:"square", gain:0.12, slide: 200 });
+        if (name === "ui")   beep({ f: 740, dur: 0.04, type:"square", gain:0.10, slide: 0 });
+      }
+
+      // Load persisted sound setting
+      const saved = localStorage.getItem("ztd_sound");
+      if (saved === "0") enabled = false;
+
+      setEnabled(enabled);
+
+      return { unlock, play, setEnabled, getEnabled };
+    })();
+
+    // ---------- Game state
+    const State = {
+      mode: "start", // start | playing | shop | gameover
+      w: 0, h: 0, dpr: 1,
+      time: 0,
+      lastT: nowMs(),
+      shakeT: 0,
+      shakeMag: 0,
+      damageFlash: 0,
+    };
+
+    const Player = {
+      maxHp: 100,
+      hp: 100,
+      coins: 0,
+      score: 0,
+      kills: 0,
+      misses: 0,
+
+      tapDamage: 1,
+      tapCooldownMs: 300,
+      lastTapShotAt: -1e9,
+
+      dmgLevel: 0,
+      rateLevel: 0,
+
+      turretLevel: 0,
+      turretCooldownMs: 900,
+      turretLastShotAt: -1e9,
+    };
+
+    const Wave = {
+      num: 0,
+      toSpawn: 0,
+      spawned: 0,
+      spawnEveryMs: 650,
+      nextSpawnAt: 0,
+      clearedAt: 0,
+      active: false,
+    };
+
+    // Best stats (localStorage)
+    const Best = {
+      wave: +localStorage.getItem("ztd_bestWave") || 0,
+      score: +localStorage.getItem("ztd_bestScore") || 0,
+    };
+    bestWaveLabel.textContent = String(Best.wave);
+    bestScoreLabel.textContent = String(Best.score);
+
+    // ---------- Zombie types
+    const ZOMBIE_TYPES = {
+      normal: { name:"Normal", speed: 52, hp: 5,  coin: 4,  passDmg: 8,  r: 18 },
+      runner: { name:"Runner", speed: 95, hp: 4,  coin: 5,  passDmg: 10, r: 16 },
+      tank:   { name:"Tank",   speed: 38, hp: 14, coin: 9,  passDmg: 18, r: 22 },
+    };
+
+    // ---------- Entity pools
+    const zombies = []; // small count, simple objects OK
+
+    // Blood decals (stamps) — fixed size ring buffer
+    const DECAL_MAX = 64;
+    const decal = {
+      x: new Float32Array(DECAL_MAX),
+      y: new Float32Array(DECAL_MAX),
+      rot: new Float32Array(DECAL_MAX),
+      life: new Float32Array(DECAL_MAX),
+      max: new Float32Array(DECAL_MAX),
+      a: new Float32Array(DECAL_MAX),
+      idx: 0,
+      count: 0,
+    };
+
+    // Particles — fixed pool (avoid allocations during play)
+    const P_MAX = 650;
+    const P = {
+      x: new Float32Array(P_MAX),
+      y: new Float32Array(P_MAX),
+      vx: new Float32Array(P_MAX),
+      vy: new Float32Array(P_MAX),
+      life: new Float32Array(P_MAX),
+      max: new Float32Array(P_MAX),
+      size: new Float32Array(P_MAX),
+      hue: new Float32Array(P_MAX),
+      idx: 0,
+    };
+
+    // Shot tracers (turret)
+    const T_MAX = 24;
+    const Trace = {
+      x1: new Float32Array(T_MAX),
+      y1: new Float32Array(T_MAX),
+      x2: new Float32Array(T_MAX),
+      y2: new Float32Array(T_MAX),
+      life: new Float32Array(T_MAX),
+      max: new Float32Array(T_MAX),
+      idx: 0,
+    };
+
+    function addTrace(x1,y1,x2,y2,ttl=0.08){
+      const i = Trace.idx;
+      Trace.x1[i]=x1; Trace.y1[i]=y1; Trace.x2[i]=x2; Trace.y2[i]=y2;
+      Trace.life[i]=ttl; Trace.max[i]=ttl;
+      Trace.idx = (Trace.idx+1) % T_MAX;
+    }
+
+    function addDecal(x,y){
+      const i = decal.idx;
+      decal.x[i]=x; decal.y[i]=y;
+      decal.rot[i]=rand(-Math.PI, Math.PI);
+      decal.max[i]=rand(3.0, 5.0);
+      decal.life[i]=decal.max[i];
+      decal.a[i]=rand(0.55, 0.9);
+      decal.idx = (decal.idx+1) % DECAL_MAX;
+      decal.count = Math.min(DECAL_MAX, decal.count+1);
+    }
+
+    function spawnParticles(x,y,count,baseSpeed=180){
+      // blood-ish burst with a touch of green/gray flecks
+      for (let k=0;k<count;k++){
+        const i = P.idx;
+        const ang = rand(0, Math.PI*2);
+        const sp  = baseSpeed * rand(0.35, 1.05);
+        P.x[i]=x; P.y[i]=y;
+        P.vx[i]=Math.cos(ang)*sp + rand(-18,18);
+        P.vy[i]=Math.sin(ang)*sp + rand(-22,22);
+        const ttl = rand(0.22, 0.65);
+        P.max[i]=ttl; P.life[i]=ttl;
+        P.size[i]=rand(1.4, 3.8);
+        P.hue[i]=Math.random() < 0.83 ? rand(350, 10) : rand(95, 140); // mostly red, some sickly green
+        P.idx = (P.idx+1) % P_MAX;
+      }
+    }
+
+    // ---------- Resize / HiDPI handling
+    function resize() {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+      State.dpr = dpr;
+
+      // Size canvas backing store
+      const w = Math.max(320, Math.floor(rect.width));
+      const h = Math.max(480, Math.floor(rect.height));
+      State.w = w; State.h = h;
+
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+
+      // Scale drawing to CSS pixels
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    window.addEventListener("resize", resize, { passive:true });
+
+    // ---------- Input (pointer events, forgiving hit detection)
+    let pointerDown = false;
+
+    function canvasPointFromEvent(e){
+      const r = canvas.getBoundingClientRect();
+      const x = (e.clientX - r.left);
+      const y = (e.clientY - r.top);
+      return { x, y };
+    }
+
+    function tryShootAt(x,y){
+      const t = nowMs();
+      // weapon cooldown
+      if (t - Player.lastTapShotAt < Player.tapCooldownMs) return;
+
+      Player.lastTapShotAt = t;
+
+      // Find closest zombie within forgiving radius
+      let hitIdx = -1;
+      let bestD2 = 1e18;
+      for (let i=0;i<zombies.length;i++){
+        const z = zombies[i];
+        // forgiving hit radius
+        const rr = z.r * 1.25;
+        const dx = x - z.x;
+        const dy = y - (z.y - z.bob*0.25);
+        const d2 = dx*dx + dy*dy;
+        if (d2 <= rr*rr && d2 < bestD2){
+          bestD2 = d2;
+          hitIdx = i;
+        }
+      }
+
+      if (hitIdx === -1) {
+        Player.misses++;
+        Sound.play("hit"); // subtle "pew" even on miss? feels responsive
+        // small spark particles (cheaper than separate pool)
+        spawnParticles(x,y,6,90);
+        return;
+      }
+
+      // Hit!
+      const z = zombies[hitIdx];
+      z.hp -= Player.tapDamage;
+      z.hitT = 0.12;
+      Sound.play("hit");
+      spawnParticles(x,y,10,130);
+
+      if (z.hp <= 0) {
+        // Kill
+        Sound.play("kill");
+        onZombieKilled(hitIdx);
+      }
+    }
+
+    function onZombieKilled(index){
+      const z = zombies[index];
+
+      Player.kills++;
+      Player.coins += z.coin;
+      // Score: coins + kills weight + wave weight
+      Player.score = Math.floor(Player.coins + Player.kills*8 + Wave.num*25);
+
+      // Big blood pop
+      spawnParticles(z.x, z.y, randi(20, 34), 240);
+
+      if (Assets.bloodOk) {
+        addDecal(z.x, z.y);
+      }
+
+      // Remove zombie (swap-pop)
+      const last = zombies.length - 1;
+      zombies[index] = zombies[last];
+      zombies.pop();
+    }
+
+    function applyPlayerDamage(amount){
+      if (amount <= 0) return;
+      Player.hp = Math.max(0, Player.hp - amount);
+      State.shakeT = 0.18;
+      State.shakeMag = 9 + amount * 0.22;
+      State.damageFlash = 0.22;
+      Sound.play("hurt");
+
+      if (Player.hp <= 0) {
+        gameOver();
+      }
+    }
+
+    // Prevent page scrolling while playing (extra safe for iOS)
+    function preventMove(e){
+      if (State.mode === "playing") e.preventDefault();
+    }
+    window.addEventListener("touchmove", preventMove, { passive:false });
+    window.addEventListener("wheel", (e) => { if (State.mode === "playing") e.preventDefault(); }, { passive:false });
+
+    canvas.addEventListener("pointerdown", (e) => {
+      pointerDown = true;
+      canvas.setPointerCapture?.(e.pointerId);
+
+      // First interaction unlocks audio (iOS/Android requirement)
+      Sound.unlock();
+
+      if (State.mode === "start") {
+        startGame();
+        return;
+      }
+      if (State.mode === "gameover") {
+        startGame();
+        return;
+      }
+      if (State.mode !== "playing") return;
+
+      const p = canvasPointFromEvent(e);
+      tryShootAt(p.x, p.y);
+    });
+
+    canvas.addEventListener("pointerup", () => { pointerDown = false; });
+    canvas.addEventListener("pointercancel", () => { pointerDown = false; });
+
+    // ---------- UI buttons
+    soundBtn.addEventListener("click", () => {
+      Sound.unlock(); // allow unlocking via button too
+      Sound.setEnabled(!Sound.getEnabled());
+      Sound.play("ui");
+    });
+
+    startBtn.addEventListener("click", () => {
+      Sound.unlock();
+      Sound.play("ui");
+      startGame();
+    });
+
+    restartBtn.addEventListener("click", () => {
+      Sound.play("ui");
+      startGame();
+    });
+
+    nextWaveBtn.addEventListener("click", () => {
+      Sound.play("wave");
+      closeShopAndStartWave();
+    });
+
+    buyDmg.addEventListener("click", () => {
+      Sound.play("ui");
+      const c = costDamage();
+      if (Player.coins < c) return showToast("Not enough coins");
+      Player.coins -= c;
+      Player.dmgLevel++;
+      Player.tapDamage = 1 + Player.dmgLevel; // simple, punchy
+      showToast("Damage upgraded");
+      updateShopUI();
+    });
+
+    buyRate.addEventListener("click", () => {
+      Sound.play("ui");
+      const c = costRateUp();
+      if (Player.coins < c) return showToast("Not enough coins");
+      Player.coins -= c;
+      Player.rateLevel++;
+      // Reduce cooldown with diminishing returns
+      const base = 300;
+      const mult = Math.pow(0.90, Player.rateLevel);
+      Player.tapCooldownMs = clamp(base * mult, 85, 300);
+      showToast("Fire rate upgraded");
+      updateShopUI();
+    });
+
+    buyTurret.addEventListener("click", () => {
+      Sound.play("ui");
+      const c = costTurretUp();
+      if (Player.coins < c) return showToast("Not enough coins");
+      Player.coins -= c;
+      Player.turretLevel++;
+      // Turret gets faster, and hits harder
+      const base = 900;
+      Player.turretCooldownMs = clamp(base * Math.pow(0.90, Player.turretLevel-1), 260, 900);
+      showToast(Player.turretLevel === 1 ? "Turret installed" : "Turret upgraded");
+      updateShopUI();
+    });
+
+    // ---------- Costs (scale each purchase)
+    function costDamage(){
+      return Math.floor(30 * Math.pow(1.45, Player.dmgLevel));
+    }
+    function costRateUp(){
+      return Math.floor(35 * Math.pow(1.55, Player.rateLevel));
+    }
+    function costTurretUp(){
+      // first purchase is pricier, then scales
+      const lvl = Player.turretLevel;
+      const base = (lvl === 0) ? 80 : 65;
+      return Math.floor(base * Math.pow(1.60, lvl));
+    }
+
+    // ---------- Game flow
+    function resetAll(){
+      zombies.length = 0;
+      Player.hp = Player.maxHp;
+      Player.coins = 0;
+      Player.score = 0;
+      Player.kills = 0;
+      Player.misses = 0;
+
+      Player.tapDamage = 1;
+      Player.tapCooldownMs = 300;
+      Player.lastTapShotAt = -1e9;
+      Player.dmgLevel = 0;
+      Player.rateLevel = 0;
+
+      Player.turretLevel = 0;
+      Player.turretCooldownMs = 900;
+      Player.turretLastShotAt = -1e9;
+
+      Wave.num = 0;
+      Wave.active = false;
+      Wave.toSpawn = 0;
+      Wave.spawned = 0;
+      Wave.spawnEveryMs = 650;
+      Wave.nextSpawnAt = 0;
+      Wave.clearedAt = 0;
+
+      State.shakeT = 0;
+      State.shakeMag = 0;
+      State.damageFlash = 0;
+
+      // clear decals quickly
+      decal.count = 0;
+
+      // clear particle lifetimes (cheap)
+      for (let i=0;i<P_MAX;i++) P.life[i] = 0;
+      for (let i=0;i<T_MAX;i++) Trace.life[i] = 0;
+    }
+
+    function startGame(){
+      resetAll();
+      State.mode = "playing";
+      mainOverlay.classList.add("hidden");
+      shopOverlay.classList.add("hidden");
+      startNextWave();
+      updateHUD();
+    }
+
+    function gameOver(){
+      State.mode = "gameover";
+      Wave.active = false;
+
+      // Update bests
+      if (Wave.num > Best.wave) Best.wave = Wave.num;
+      if (Player.score > Best.score) Best.score = Player.score;
+      localStorage.setItem("ztd_bestWave", String(Best.wave));
+      localStorage.setItem("ztd_bestScore", String(Best.score));
+
+      bestWaveLabel.textContent = String(Best.wave);
+      bestScoreLabel.textContent = String(Best.score);
+
+      overlayTitle.textContent = "Game over";
+      overlayDesc.innerHTML = `You reached <b>Wave ${Wave.num}</b> · Score <b>${Player.score}</b>.<br>Tap Start to try again.`;
+      startBtn.textContent = "Restart";
+      mainOverlay.classList.remove("hidden");
+    }
+
+    function startNextWave(){
+      Wave.num++;
+      Wave.active = true;
+
+      const w = Wave.num;
+      Wave.toSpawn = Math.floor(6 + w * 3.2);
+      Wave.spawned = 0;
+
+      // Faster spawn at higher waves
+      Wave.spawnEveryMs = clamp(720 - w * 24, 260, 720);
+      Wave.nextSpawnAt = nowMs() + 350;
+
+      // Reward a tiny “breather” after shop
+      Sound.play("wave");
+      updateHUD();
+    }
+
+    function waveCleared(){
+      Wave.active = false;
+      Wave.clearedAt = nowMs();
+      State.mode = "shop";
+      openShop();
+    }
+
+    function openShop(){
+      updateShopUI();
+      shopOverlay.classList.remove("hidden");
+    }
+
+    function closeShopAndStartWave(){
+      shopOverlay.classList.add("hidden");
+      State.mode = "playing";
+      startNextWave();
+    }
+
+    function updateShopUI(){
+      costDmg.textContent = `Cost: ${costDamage()} coins`;
+      costRate.textContent = `Cost: ${costRateUp()} coins`;
+      costTurret.textContent = `Cost: ${costTurretUp()} coins`;
+
+      buyDmg.disabled = Player.coins < costDamage();
+      buyRate.disabled = Player.coins < costRateUp();
+      buyTurret.disabled = Player.coins < costTurretUp();
+
+      buyDmg.style.opacity = buyDmg.disabled ? 0.55 : 1;
+      buyRate.style.opacity = buyRate.disabled ? 0.55 : 1;
+      buyTurret.style.opacity = buyTurret.disabled ? 0.55 : 1;
+
+      const ratePerSec = (1000 / Player.tapCooldownMs).toFixed(1);
+      const turretTxt = Player.turretLevel === 0 ? "none" : `Lv ${Player.turretLevel}`;
+      shopStats.textContent =
+        `Coins ${Player.coins} · Tap dmg ${Player.tapDamage} · Fire ${ratePerSec}/s · Turret ${turretTxt}`;
+      updateHUD();
+    }
+
+    // ---------- Spawning zombies (wave-based difficulty + types)
+    function chooseZombieType(waveNum){
+      // More runners and tanks later
+      const runnerChance = clamp(0.18 + waveNum * 0.010, 0.18, 0.48);
+      const tankChance   = clamp(0.06 + waveNum * 0.008, 0.06, 0.26);
+      const r = Math.random();
+      if (r < tankChance) return "tank";
+      if (r < tankChance + runnerChance) return "runner";
+      return "normal";
+    }
+
+    function spawnZombie(){
+      const typeKey = chooseZombieType(Wave.num);
+      const base = ZOMBIE_TYPES[typeKey];
+
+      const speedScale = 1 + Wave.num * 0.045;  // slightly faster each wave
+      const hpScale    = 1 + Wave.num * (typeKey === "tank" ? 0.14 : 0.10);
+
+      const margin = 26;
+      const x = rand(margin, State.w - margin);
+      const y = rand(-40, -12);
+      const z = {
+        type: typeKey,
+        x, y,
+        vy: base.speed * speedScale,
+        r: base.r,
+        maxHp: Math.ceil(base.hp * hpScale),
+        hp: 0,
+        coin: base.coin + Math.floor(Wave.num * 0.20),
+        passDmg: base.passDmg + Math.floor(Wave.num * 0.15),
+
+        // animation
+        t: rand(0, 10),
+        bob: 0,
+        step: rand(0, Math.PI*2),
+        hitT: 0,
+
+        // sprite frame timer
+        frame: 0,
+        frameT: 0,
+      };
+      z.hp = z.maxHp;
+      zombies.push(z);
+    }
+
+    // ---------- Turret logic
+    function turretDamage(){
+      if (Player.turretLevel <= 0) return 0;
+      // Turret damage scales gently
+      return 1 + Math.floor(Player.turretLevel * 0.85);
+    }
+
+    function turretTryShoot(){
+      if (Player.turretLevel <= 0) return;
+      const t = nowMs();
+      if (t - Player.turretLastShotAt < Player.turretCooldownMs) return;
+      if (zombies.length === 0) return;
+
+      // Nearest zombie (simple O(n) is fine for ~60)
+      const tx = State.w * 0.5;
+      const ty = State.h - 22;
+
+      let best = -1;
+      let bestD2 = 1e18;
+      for (let i=0;i<zombies.length;i++){
+        const z = zombies[i];
+        const dx = z.x - tx;
+        const dy = z.y - ty;
+        const d2 = dx*dx + dy*dy;
+        if (d2 < bestD2){
+          bestD2 = d2;
+          best = i;
+        }
+      }
+      if (best === -1) return;
+
+      Player.turretLastShotAt = t;
+
+      const z = zombies[best];
+      const dmg = turretDamage();
+
+      // tracer
+      addTrace(tx, ty, z.x, z.y, 0.09);
+
+      // impact
+      z.hp -= dmg;
+      z.hitT = 0.10;
+      spawnParticles(z.x, z.y, 8, 120);
+      Sound.play("hit");
+
+      if (z.hp <= 0) {
+        Sound.play("kill");
+        onZombieKilled(best);
+      }
+    }
+
+    // ---------- HUD updates
+    function updateHUD(){
+      hpLabel.textContent = fmt(Player.hp);
+      const pct = (Player.hp / Player.maxHp) * 100;
+      hpFill.style.transform = `scaleX(${clamp(pct/100, 0, 1)})`;
+      hpPct.textContent = `${fmt(pct)}%`;
+
+      coinLabel.textContent = fmt(Player.coins);
+      waveLabel.textContent = fmt(Wave.num);
+      scoreLabel.textContent = fmt(Player.score);
+
+      dmgLabel.textContent = fmt(Player.tapDamage);
+      rateLabel.textContent = `${(1000/Player.tapCooldownMs).toFixed(1)}/s`;
+      turretLabel.textContent = Player.turretLevel ? `Lv ${Player.turretLevel}` : "—";
+    }
+
+    // ---------- Rendering helpers
+    function drawRoundedRect(x,y,w,h,r){
+      ctx.beginPath();
+      ctx.moveTo(x+r,y);
+      ctx.arcTo(x+w,y,x+w,y+h,r);
+      ctx.arcTo(x+w,y+h,x,y+h,r);
+      ctx.arcTo(x,y+h,x,y,r);
+      ctx.arcTo(x,y,x+w,y,r);
+      ctx.closePath();
+    }
+
+    function drawZombieProcedural(z){
+      // A simple animated “walking” zombie: head + body + swinging legs + bob
+      const x = z.x;
+      const y = z.y - z.bob;
+      const s = 1 + (z.hitT > 0 ? 0.06 : 0); // tiny hit pop
+      const r = z.r * s;
+
+      // Colors by type (subtle)
+      const isRunner = z.type === "runner";
+      const isTank   = z.type === "tank";
+      const skin = isTank ? "rgba(140, 190, 120, 0.95)" : isRunner ? "rgba(125, 200, 145, 0.95)" : "rgba(120, 190, 135, 0.95)";
+      const cloth= isTank ? "rgba(60, 80, 92, 0.95)" : isRunner ? "rgba(70, 86, 105, 0.95)" : "rgba(68, 84, 100, 0.95)";
+      const dark = "rgba(10,12,16,.65)";
+      const outline = z.hitT > 0 ? "rgba(255,255,255,.28)" : "rgba(0,0,0,.35)";
+
+      ctx.save();
+      ctx.translate(x, y);
+
+      // shadow
+      ctx.fillStyle = "rgba(0,0,0,.35)";
+      ctx.beginPath();
+      ctx.ellipse(0, r*1.25, r*0.9, r*0.35, 0, 0, Math.PI*2);
+      ctx.fill();
+
+      // legs swing
+      const swing = Math.sin(z.step) * (isTank ? 0.22 : isRunner ? 0.55 : 0.38);
+      const legY = r*1.10;
+      const legLen = r*0.9;
+
+      ctx.lineCap = "round";
+      ctx.lineWidth = Math.max(2, r*0.16);
+      ctx.strokeStyle = "rgba(30,35,45,.95)";
+
+      ctx.beginPath();
+      ctx.moveTo(-r*0.25, legY);
+      ctx.lineTo(-r*0.25 + swing*r*0.32, legY + legLen);
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.moveTo(r*0.25, legY);
+      ctx.lineTo(r*0.25 - swing*r*0.32, legY + legLen);
+      ctx.stroke();
+
+      // body
+      ctx.fillStyle = cloth;
+      ctx.strokeStyle = outline;
+      ctx.lineWidth = Math.max(1.5, r*0.08);
+      drawRoundedRect(-r*0.62, -r*0.10, r*1.24, r*1.25, r*0.35);
+      ctx.fill();
+      ctx.stroke();
+
+      // arms
+      ctx.strokeStyle = "rgba(35,45,55,.9)";
+      ctx.lineWidth = Math.max(2, r*0.12);
+      ctx.beginPath();
+      ctx.moveTo(-r*0.62, r*0.35);
+      ctx.lineTo(-r*0.98, r*0.55 + swing*r*0.15);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(r*0.62, r*0.35);
+      ctx.lineTo(r*0.98, r*0.55 - swing*r*0.15);
+      ctx.stroke();
+
+      // head
+      ctx.fillStyle = skin;
+      ctx.strokeStyle = outline;
+      ctx.lineWidth = Math.max(1.2, r*0.08);
+      ctx.beginPath();
+      ctx.arc(0, -r*0.70, r*0.55, 0, Math.PI*2);
+      ctx.fill();
+      ctx.stroke();
+
+      // eyes + mouth
+      ctx.fillStyle = "rgba(0,0,0,.55)";
+      ctx.beginPath();
+      ctx.arc(-r*0.18, -r*0.78, r*0.08, 0, Math.PI*2);
+      ctx.arc(r*0.18, -r*0.78, r*0.08, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.strokeStyle = dark;
+      ctx.lineWidth = Math.max(1, r*0.06);
+      ctx.beginPath();
+      ctx.arc(0, -r*0.58, r*0.18, 0.1*Math.PI, 0.9*Math.PI);
+      ctx.stroke();
+
+      // HP bar (only if damaged)
+      if (z.hp < z.maxHp) {
+        const bw = r*1.3;
+        const bh = Math.max(4, r*0.18);
+        const px = -bw/2;
+        const py = -r*1.42;
+        ctx.fillStyle = "rgba(0,0,0,.35)";
+        ctx.fillRect(px, py, bw, bh);
+        const t = clamp(z.hp / z.maxHp, 0, 1);
+        ctx.fillStyle = t > 0.5 ? "rgba(34,197,94,.9)" : t > 0.25 ? "rgba(245,158,11,.9)" : "rgba(239,68,68,.9)";
+        ctx.fillRect(px, py, bw * t, bh);
+        ctx.strokeStyle = "rgba(255,255,255,.12)";
+        ctx.strokeRect(px, py, bw, bh);
+      }
+
+      ctx.restore();
+    }
+
+    function drawZombieSprite(z){
+      const img = Assets.zombieSheet;
+      if (!img) return false;
+
+      // Assume 4 frames horizontally, single row
+      const frames = 4;
+      const fw = img.width / frames;
+      const fh = img.height;
+
+      const x = z.x;
+      const y = z.y - z.bob;
+
+      // animate
+      z.frameT += 1/60; // approximate, will also update in update()
+      const f = z.frame % frames;
+
+      const scale = (z.type === "tank") ? 1.25 : (z.type === "runner") ? 0.95 : 1.05;
+      const size = z.r * 2.2 * scale;
+
+      ctx.save();
+      ctx.translate(x, y);
+      const hitS = (z.hitT > 0) ? 1.08 : 1.0;
+      ctx.scale(hitS, hitS);
+
+      // shadow
+      ctx.fillStyle = "rgba(0,0,0,.35)";
+      ctx.beginPath();
+      ctx.ellipse(0, z.r*1.3, z.r*0.95, z.r*0.38, 0, 0, Math.PI*2);
+      ctx.fill();
+
+      // image
+      ctx.globalAlpha = 0.98;
+      ctx.drawImage(img, f*fw, 0, fw, fh, -size/2, -size/2, size, size);
+
+      // outline on hit
+      if (z.hitT > 0) {
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = "rgba(255,255,255,.28)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(0, 0, z.r*1.05, 0, Math.PI*2);
+        ctx.stroke();
+      }
+
+      // HP bar
+      if (z.hp < z.maxHp) {
+        const bw = z.r*1.35;
+        const bh = Math.max(4, z.r*0.18);
+        const px = -bw/2;
+        const py = -z.r*1.45;
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = "rgba(0,0,0,.35)";
+        ctx.fillRect(px, py, bw, bh);
+        const t = clamp(z.hp / z.maxHp, 0, 1);
+        ctx.fillStyle = t > 0.5 ? "rgba(34,197,94,.9)" : t > 0.25 ? "rgba(245,158,11,.9)" : "rgba(239,68,68,.9)";
+        ctx.fillRect(px, py, bw*t, bh);
+        ctx.strokeStyle = "rgba(255,255,255,.12)";
+        ctx.strokeRect(px, py, bw, bh);
+      }
+
+      ctx.restore();
+      return true;
+    }
+
+    function drawTurret(){
+      if (Player.turretLevel <= 0) return;
+      const x = State.w * 0.5;
+      const y = State.h - 16;
+
+      ctx.save();
+      ctx.translate(x,y);
+
+      // base
+      ctx.fillStyle = "rgba(20,24,34,.92)";
+      ctx.strokeStyle = "rgba(255,255,255,.10)";
+      ctx.lineWidth = 2;
+      drawRoundedRect(-24, -14, 48, 22, 10);
+      ctx.fill(); ctx.stroke();
+
+      // barrel
+      ctx.fillStyle = "rgba(139,92,246,.85)";
+      ctx.strokeStyle = "rgba(139,92,246,.35)";
+      drawRoundedRect(-6, -26, 12, 18, 6);
+      ctx.fill(); ctx.stroke();
+
+      // glow
+      ctx.globalAlpha = 0.25;
+      ctx.fillStyle = "rgba(139,92,246,1)";
+      ctx.beginPath();
+      ctx.arc(0, -18, 10 + Player.turretLevel*1.2, 0, Math.PI*2);
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    // ---------- Main update loop
+    function update(dt){
+      State.time += dt;
+
+      // screen shake decay
+      if (State.shakeT > 0) State.shakeT = Math.max(0, State.shakeT - dt);
+      if (State.damageFlash > 0) State.damageFlash = Math.max(0, State.damageFlash - dt);
+
+      if (State.mode !== "playing") return;
+
+      // Spawn logic
+      const t = nowMs();
+      if (Wave.active && Wave.spawned < Wave.toSpawn && t >= Wave.nextSpawnAt) {
+        spawnZombie();
+        Wave.spawned++;
+        Wave.nextSpawnAt = t + Wave.spawnEveryMs * rand(0.72, 1.10);
+      }
+
+      // Turret
+      turretTryShoot();
+
+      // Update zombies
+      for (let i=zombies.length-1; i>=0; i--){
+        const z = zombies[i];
+        z.t += dt;
+
+        // bob + step
+        const bobAmp = (z.type === "runner") ? 4.6 : (z.type === "tank") ? 2.9 : 3.6;
+        z.step += dt * ((z.type === "runner") ? 10.0 : (z.type === "tank") ? 6.2 : 8.0);
+        z.bob = Math.sin(z.t*8.2) * bobAmp;
+
+        z.y += z.vy * dt;
+
+        if (z.hitT > 0) z.hitT = Math.max(0, z.hitT - dt);
+
+        // sprite animation frame (if sheet exists)
+        if (Assets.zombieSheetOk) {
+          z.frameT += dt;
+          const spd = (z.type === "runner") ? 0.09 : (z.type === "tank") ? 0.14 : 0.11;
+          if (z.frameT >= spd) {
+            z.frameT = 0;
+            z.frame = (z.frame + 1) & 3;
+          }
+        }
+
+        // Reached bottom: damage player and remove
+        if (z.y - z.r > State.h + 6) {
+          applyPlayerDamage(z.passDmg);
+          // Remove zombie
+          const last = zombies.length - 1;
+          zombies[i] = zombies[last];
+          zombies.pop();
+        }
+      }
+
+      // Wave complete?
+      if (Wave.active && Wave.spawned >= Wave.toSpawn && zombies.length === 0) {
+        waveCleared();
+      }
+
+      updateHUD();
+    }
+
+    function updateParticles(dt){
+      // Particles
+      for (let i=0;i<P_MAX;i++){
+        let life = P.life[i];
+        if (life <= 0) continue;
+        life -= dt;
+        P.life[i] = life;
+        if (life <= 0) continue;
+
+        P.vy[i] += 520 * dt; // gravity
+        P.x[i]  += P.vx[i] * dt;
+        P.y[i]  += P.vy[i] * dt;
+
+        // mild drag
+        P.vx[i] *= (1 - 0.8*dt);
+        P.vy[i] *= (1 - 0.3*dt);
+      }
+
+      // Decals (fade)
+      for (let i=0;i<decal.count;i++){
+        if (decal.life[i] <= 0) continue;
+        decal.life[i] -= dt;
+      }
+
+      // Traces
+      for (let i=0;i<T_MAX;i++){
+        if (Trace.life[i] <= 0) continue;
+        Trace.life[i] -= dt;
+      }
+    }
+
+    // ---------- Drawing
+    function draw(){
+      // Clear
+      ctx.clearRect(0,0,State.w,State.h);
+
+      // Screen shake transform
+      ctx.save();
+      if (State.shakeT > 0) {
+        const t = State.shakeT;
+        const mag = State.shakeMag * (t/0.18);
+        ctx.translate(rand(-mag, mag), rand(-mag, mag));
+      }
+
+      // Subtle ground line near bottom
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = "rgba(255,255,255,.10)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, State.h - 8);
+      ctx.lineTo(State.w, State.h - 8);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      // Blood decals (if image present)
+      if (Assets.bloodOk && decal.count > 0) {
+        for (let i=0;i<decal.count;i++){
+          const life = decal.life[i];
+          if (life <= 0) continue;
+          const t = clamp(life / decal.max[i], 0, 1);
+          const a = decal.a[i] * t;
+          const size = lerp(44, 56, 1 - t);
+
+          ctx.save();
+          ctx.translate(decal.x[i], decal.y[i]);
+          ctx.rotate(decal.rot[i]);
+          ctx.globalAlpha = a;
+          ctx.drawImage(Assets.blood, -size/2, -size/2, size, size);
+          ctx.restore();
+        }
+      }
+
+      // Turret
+      drawTurret();
+
+      // Zombies
+      for (let i=0;i<zombies.length;i++){
+        const z = zombies[i];
+        if (Assets.zombieSheetOk) {
+          // Use sprite if possible, else fallback procedural
+          const ok = drawZombieSprite(z);
+          if (!ok) drawZombieProcedural(z);
+        } else {
+          drawZombieProcedural(z);
+        }
+      }
+
+      // Traces
+      for (let i=0;i<T_MAX;i++){
+        const life = Trace.life[i];
+        if (life <= 0) continue;
+        const t = clamp(life / Trace.max[i], 0, 1);
+        ctx.globalAlpha = t * 0.8;
+        ctx.strokeStyle = "rgba(139,92,246,.95)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(Trace.x1[i], Trace.y1[i]);
+        ctx.lineTo(Trace.x2[i], Trace.y2[i]);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+
+      // Particles
+      for (let i=0;i<P_MAX;i++){
+        const life = P.life[i];
+        if (life <= 0) continue;
+        const t = clamp(life / P.max[i], 0, 1);
+        const a = t * 0.9;
+
+        ctx.globalAlpha = a;
+        // HSL without expensive strings? (strings are fine at this scale, but we keep it simple)
+        const hue = P.hue[i];
+        ctx.fillStyle = `hsla(${hue}, 90%, 55%, ${a})`;
+
+        const s = P.size[i];
+        ctx.beginPath();
+        ctx.arc(P.x[i], P.y[i], s, 0, Math.PI*2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
+      ctx.restore();
+
+      // Damage flash overlay (no transform)
+      if (State.damageFlash > 0) {
+        const a = clamp(State.damageFlash / 0.22, 0, 1) * 0.25;
+        ctx.fillStyle = `rgba(239,68,68,${a})`;
+        ctx.fillRect(0,0,State.w,State.h);
+      }
+
+      // Start hint while in start mode (canvas-only hint behind overlay is fine)
+      if (State.mode === "playing") {
+        // small bottom hint if no turret yet (only early waves)
+        if (Wave.num <= 2 && Player.turretLevel === 0) {
+          ctx.globalAlpha = 0.18;
+          ctx.fillStyle = "rgba(255,255,255,.9)";
+          ctx.font = "700 12px ui-sans-serif, system-ui";
+          ctx.textAlign = "center";
+          ctx.fillText("Tip: Buy a turret between waves 🛒", State.w/2, State.h - 36);
+          ctx.globalAlpha = 1;
+        }
+      }
+    }
+
+    // ---------- Loop
+    function loop(){
+      const t = nowMs();
+      const dt = clamp((t - State.lastT) / 1000, 0, 0.033);
+      State.lastT = t;
+
+      update(dt);
+      updateParticles(dt);
+      draw();
+
+      requestAnimationFrame(loop);
+    }
+
+    // ---------- Start / Shop UI setup text
+    function setStartOverlay(){
+      overlayTitle.textContent = "Tap to start";
+      overlayDesc.textContent = "Your first tap will also unlock audio on mobile. Survive as many waves as you can.";
+      startBtn.textContent = "Start";
+      mainOverlay.classList.remove("hidden");
+      shopOverlay.classList.add("hidden");
+      State.mode = "start";
+    }
+
+    // ---------- Passive “enter shop” helper (when wave clears)
+    function closeIfOpen(el){
+      if (!el.classList.contains("hidden")) el.classList.add("hidden");
+    }
+
+    // ---------- Initialize
+    function init(){
+      resize();
+      setStartOverlay();
+      updateHUD();
+
+      // Update best labels
+      bestWaveLabel.textContent = String(Best.wave);
+      bestScoreLabel.textContent = String(Best.score);
+
+      // Keep canvas properly sized
+      // (call once more after layout settles)
+      setTimeout(resize, 50);
+
+      requestAnimationFrame(loop);
+    }
+
+    init();
+  })();
+  </script>
+</body>
+</html>
