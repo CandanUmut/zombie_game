@@ -877,6 +877,7 @@
       bloodAtlas: { cols:2, rows:2, cellW:0, cellH:0 },
       humanSprite: null,
       humanSpriteOk: false,
+      humanFrames: null,
     };
 
     function colorKeyToCanvas(img, tolerance=18){
@@ -894,6 +895,42 @@
       }
       g.putImageData(data,0,0);
       return c;
+    }
+
+    function computeHumanFrames(img){
+      const frames = 4;
+      const fw = img.width / frames;
+      const fh = img.height;
+      const c = document.createElement("canvas");
+      c.width = fw; c.height = fh;
+      const g = c.getContext("2d", { willReadFrequently:true });
+      if (!g) return null;
+      const meta = [];
+      for (let i=0;i<frames;i++){
+        g.clearRect(0,0,fw,fh);
+        g.drawImage(img, -i*fw, 0);
+        const { data } = g.getImageData(0,0,fw,fh);
+        let minX = fw, minY = fh, maxX = -1, maxY = -1;
+        for (let y=0;y<fh;y++){
+          const row = y * fw * 4;
+          for (let x=0;x<fw;x++){
+            const a = data[row + x*4 + 3];
+            if (a > 10){
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+        if (maxX < minX || maxY < minY){
+          minX = 0; minY = 0; maxX = fw - 1; maxY = fh - 1;
+        }
+        const sw = maxX - minX + 1;
+        const sh = maxY - minY + 1;
+        meta.push({ sx: i*fw + minX, sy: minY, sw, sh, anchorX: sw/2, anchorY: sh });
+      }
+      return meta;
     }
 
     function loadImage(url) {
@@ -918,7 +955,11 @@
         Assets.bloodAtlas.cellW = c.width / Assets.bloodAtlas.cols;
         Assets.bloodAtlas.cellH = c.height / Assets.bloodAtlas.rows;
       }
-      if (human.ok) { Assets.humanSprite = human.img; Assets.humanSpriteOk = true; }
+      if (human.ok) {
+        Assets.humanSprite = human.img;
+        Assets.humanFrames = computeHumanFrames(human.img);
+        Assets.humanSpriteOk = true;
+      }
     });
 
     // ---------- Sound manager (WebAudio with unlock + optional file buffers)
@@ -1230,7 +1271,7 @@
         const h = humans[i];
         const dx = x - h.x;
         const dy = y - h.y;
-        const r = h.r * 1.15;
+        const r = h.r * 1.1;
         const d2 = dx*dx + dy*dy;
         if (d2 <= r*r && d2 < bestD2){
           bestD2 = d2;
@@ -2079,15 +2120,16 @@
         x, y,
         baseX: x,
         vy: rand(24, 38),
-        wiggleAmp: rand(10, 28),
-        wiggleFreq: rand(0.8, 1.5),
+        wiggleAmp: rand(3, 8),
+        wiggleFreq: rand(0.9, 1.6),
         wigglePhase: rand(0, Math.PI*2),
         t: 0,
-        r: 16,
+        r: 24,
         flip: Math.random() < 0.5,
         frame: 0,
         frameT: 0,
-        frameStep: rand(0.10, 0.14),
+        frameStep: 0.085,
+        bob: 0,
       };
       humans.push(h);
     }
@@ -2224,7 +2266,7 @@
       if (t < State.nextHumanAt) return;
       State.nextHumanAt = t + rand(900, 1700);
       if (humans.length >= 3) return;
-      const chance = clamp(0.04 + Wave.num * 0.0025, 0.04, 0.08);
+      const chance = Math.min(0.20, 0.15 + Wave.num * 0.004);
       if (Math.random() < chance) spawnHuman();
     }
 
@@ -2727,25 +2769,33 @@
 
     function drawHumanSprite(h){
       const img = Assets.humanSprite;
-      if (!img) return false;
-      const frames = 4;
-      const fw = img.width / frames;
-      const fh = img.height;
-      const f = h.frame % frames;
-      const size = h.r * 2.2;
+      const frames = Assets.humanFrames;
+      if (!img || !frames || frames.length < 4) return false;
+      const meta = frames[h.frame % 4];
+      const targetH = h.r * 3.1;
+      const scale = targetH / meta.sh;
+      const drawW = meta.sw * scale;
+      const drawH = meta.sh * scale;
+      const groundY = h.r * 1.25;
+      const anchorX = (meta.anchorX ?? meta.sw/2) * scale;
+      const anchorY = (meta.anchorY ?? meta.sh) * scale;
 
       ctx.save();
-      ctx.translate(h.x, h.y);
+      ctx.translate(h.x, h.y + (h.bob || 0));
       ctx.scale(h.flip ? -1 : 1, 1);
 
       // shadow
       ctx.fillStyle = "rgba(0,0,0,.32)";
       ctx.beginPath();
-      ctx.ellipse(0, size*0.32, size*0.42, size*0.16, 0, 0, Math.PI*2);
+      const shadowW = drawW * 0.42;
+      const shadowH = shadowW * 0.35;
+      ctx.ellipse(0, groundY, shadowW, shadowH, 0, 0, Math.PI*2);
       ctx.fill();
 
       ctx.globalAlpha = 0.98;
-      ctx.drawImage(img, f*fw, 0, fw, fh, -size/2, -size/2, size, size);
+      const dx = -anchorX;
+      const dy = groundY - anchorY;
+      ctx.drawImage(img, meta.sx, meta.sy, meta.sw, meta.sh, dx, dy, drawW, drawH);
       ctx.restore();
       return true;
     }
@@ -2754,32 +2804,33 @@
       const x = h.x;
       const y = h.y;
       const r = h.r;
+      const groundY = r * 1.25;
       ctx.save();
-      ctx.translate(x, y);
+      ctx.translate(x, y + (h.bob || 0));
       ctx.scale(h.flip ? -1 : 1, 1);
       ctx.fillStyle = "rgba(0,0,0,.28)";
       ctx.beginPath();
-      ctx.ellipse(0, r*0.9, r*0.85, r*0.32, 0, 0, Math.PI*2);
+      ctx.ellipse(0, groundY, r*0.9, r*0.32, 0, 0, Math.PI*2);
       ctx.fill();
-      // simple bright stick figure
-      ctx.strokeStyle = "rgba(248,250,252,0.9)";
-      ctx.fillStyle = "rgba(244,244,245,0.85)";
-      ctx.lineWidth = 3;
+      // simple bright stick figure (taller, clear human shape)
+      ctx.strokeStyle = "rgba(236,239,244,0.95)";
+      ctx.fillStyle = "rgba(244,244,245,0.9)";
+      ctx.lineWidth = 2.8;
       ctx.beginPath();
-      ctx.arc(0, -r*0.45, r*0.42, 0, Math.PI*2);
+      ctx.arc(0, -r*0.8, r*0.38, 0, Math.PI*2);
       ctx.fill();
       ctx.stroke();
       ctx.beginPath();
-      ctx.moveTo(0, -r*0.05);
-      ctx.lineTo(0, r*0.9);
-      ctx.moveTo(0, r*0.2);
-      ctx.lineTo(-r*0.7, r*0.55);
-      ctx.moveTo(0, r*0.2);
-      ctx.lineTo(r*0.7, r*0.55);
-      ctx.moveTo(0, r*0.9);
-      ctx.lineTo(-r*0.5, r*1.6);
-      ctx.moveTo(0, r*0.9);
-      ctx.lineTo(r*0.5, r*1.6);
+      ctx.moveTo(0, -r*0.3);
+      ctx.lineTo(0, r*1.2);
+      ctx.moveTo(0, r*0.15);
+      ctx.lineTo(-r*0.65, r*0.65);
+      ctx.moveTo(0, r*0.15);
+      ctx.lineTo(r*0.65, r*0.65);
+      ctx.moveTo(0, r*1.2);
+      ctx.lineTo(-r*0.45, r*1.9);
+      ctx.moveTo(0, r*1.2);
+      ctx.lineTo(r*0.45, r*1.9);
       ctx.stroke();
       ctx.restore();
     }
@@ -2911,9 +2962,12 @@
         const wiggle = Math.sin(h.t * h.wiggleFreq + h.wigglePhase) * h.wiggleAmp;
         const margin = 18;
         h.x = clamp(h.baseX + wiggle, margin, State.w - margin);
+        h.x = clamp(h.x + Math.sin(h.t * 2.8) * 0.18, margin, State.w - margin);
+        h.bob = Math.sin(h.t * 6.5) * 1.4;
         h.y += h.vy * dt;
         h.frameT += dt;
-        if (h.frameT >= (h.frameStep || 0.12)) {
+        const frameStep = h.frameStep || 0.085;
+        if (h.frameT >= frameStep) {
           h.frameT = 0;
           h.frame = (h.frame + 1) & 3;
         }
