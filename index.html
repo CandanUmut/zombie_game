@@ -2772,7 +2772,7 @@
       const frames = Assets.humanFrames;
       if (!img || !frames || frames.length < 4) return false;
       const meta = frames[h.frame % 4];
-      const targetH = h.r * 3.1;
+      const targetH = (h.r * 3.1) * 0.70;
       const scale = targetH / meta.sh;
       const drawW = meta.sw * scale;
       const drawH = meta.sh * scale;
