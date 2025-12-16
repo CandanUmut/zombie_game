@@ -875,6 +875,8 @@
       blood: null,
       bloodOk: false,
       bloodAtlas: { cols:2, rows:2, cellW:0, cellH:0 },
+      humanSprite: null,
+      humanSpriteOk: false,
     };
 
     function colorKeyToCanvas(img, tolerance=18){
@@ -907,7 +909,8 @@
     Promise.all([
       loadImage("assets/zombie_sheet.png"),
       loadImage("assets/blood.png"),
-    ]).then(([zs, bl]) => {
+      loadImage("assets/human_sprite.png"),
+    ]).then(([zs, bl, human]) => {
       if (zs.ok) { Assets.zombieSheet = colorKeyToCanvas(zs.img); Assets.zombieSheetOk = true; }
       if (bl.ok) {
         const c = colorKeyToCanvas(bl.img);
@@ -915,6 +918,7 @@
         Assets.bloodAtlas.cellW = c.width / Assets.bloodAtlas.cols;
         Assets.bloodAtlas.cellH = c.height / Assets.bloodAtlas.rows;
       }
+      if (human.ok) { Assets.humanSprite = human.img; Assets.humanSpriteOk = true; }
     });
 
     // ---------- Sound manager (WebAudio with unlock + optional file buffers)
@@ -1045,6 +1049,7 @@
       paused: false,
       reduceMotion: !!Save.settings.reduceMotionOn,
       lastAmmoWarnAt: 0,
+      nextHumanAt: 0,
     };
 
     const Player = {
@@ -1064,9 +1069,10 @@
       rateLevel: 0,
 
       turretLevel: 0,
-      turretCooldownMs: 900,
+      turretCooldownMs: 2200,
       turretLastShotAt: -1e9,
       turretHeat: 0,
+      turretWarmUntil: 0,
 
       multishotLevel: 0,
       explosiveLevel: 0,
@@ -1081,7 +1087,7 @@
       Player.tapDamage = 1 + Player.dmgLevel;
       const base = 320;
       Player.tapCooldownMs = clamp(base * Math.pow(0.90, Player.rateLevel), 80, 320);
-      Player.turretCooldownMs = clamp(1200 * Math.pow(0.92, Math.max(0, Player.turretLevel-1)), 460, 1200);
+      Player.turretCooldownMs = clamp(2200 * Math.pow(0.93, Math.max(0, Player.turretLevel-1)), 1400, 2200);
     }
 
     function applySaveToPlayer(){
@@ -1110,7 +1116,8 @@
       clearedAt: 0,
       active: false,
       isBossWave: false,
-      bossSpawned: false,
+      bossSpawned: 0,
+      bossPlan: [],
       mood: "NORMAL",
     };
 
@@ -1132,6 +1139,7 @@
 
     // ---------- Entity pools
     const zombies = []; // small count, simple objects OK
+    const humans = [];
 
     // Blood decals (stamps) — fixed size ring buffer
     const DECAL_MAX = 64;
@@ -1215,6 +1223,37 @@
       retIdx = (retIdx+1) % RET_MAX;
     }
 
+    function findHumanAt(x,y){
+      let best = -1;
+      let bestD2 = 1e18;
+      for (let i=0;i<humans.length;i++){
+        const h = humans[i];
+        const dx = x - h.x;
+        const dy = y - h.y;
+        const r = h.r * 1.15;
+        const d2 = dx*dx + dy*dy;
+        if (d2 <= r*r && d2 < bestD2){
+          bestD2 = d2;
+          best = i;
+        }
+      }
+      return best;
+    }
+
+    function onHumanHit(idx){
+      const h = humans[idx];
+      if (!h) return;
+      resetCombo(false);
+      const dmg = Math.ceil(Player.maxHp * 0.5);
+      applyPlayerDamage(dmg, false);
+      showToast(`You hit a human! -${dmg} HP`);
+      spawnParticles(h.x, h.y, 10, 80);
+      addRing(h.x, h.y, 18, 0.3);
+      const last = humans.length - 1;
+      humans[idx] = humans[last];
+      humans.pop();
+    }
+
     function addDecal(x,y){
       const i = decal.idx;
       decal.x[i]=x; decal.y[i]=clamp(y, State.playTop + 4, State.h - 6);
@@ -1277,42 +1316,49 @@
       return { x, y };
     }
 
-    function triggerExplosion(x,y){
+    function triggerExplosion(x,y, excludeIdx=-1){
       if (Player.explosiveLevel <= 0) return;
-      const radius = 60 + Player.explosiveLevel * 12;
-      const killList = [];
+      const baseR = Player.explosiveLevel === 1 ? 45 : 60;
+      const radius = clamp(baseR, 0, 65);
+      const killCap = 4;
+      let extraKills = 0;
       let hitSomething = false;
+
+      const hits = [];
       for (let i=0; i<zombies.length; i++){
+        if (i === excludeIdx) continue;
         const z = zombies[i];
+        if (!z || z.hp <= 0) continue;
         if (z.isCloaked) continue;
         const dx = z.x - x;
         const dy = z.y - y;
         if (dx*dx + dy*dy > radius*radius) continue;
-        hitSomething = true;
+        hits.push(i);
+      }
+
+      if (hits.length === 0) return;
+      hitSomething = true;
+
+      // process from back to keep indices stable
+      hits.sort((a,b) => b-a);
+      for (const idx of hits){
+        const z = zombies[idx];
+        if (!z) continue;
+        if (extraKills >= killCap && !z.isBoss) continue;
         if (z.isBoss) {
           z.hp = Math.max(0, z.hp - 1);
           z.hitT = 0.08;
-          if (z.hp <= 0) killList.push(i);
+          if (z.hp <= 0) { killZombieAtIndex(idx, "explosion"); }
           continue;
         }
-        if (z.maxHp <= 1 || z.hp <= 1) {
-          killList.push(i);
-        } else {
-          z.hp = Math.max(0, z.hp - 1);
-          z.hitT = 0.08;
-          if (z.hp <= 0) killList.push(i);
+        const dmg = 1;
+        const killed = applyDamageToZombie(idx, dmg, { source:"explosion", hitSound:false, spawnFx:false, allowExplosion:false, cause:"explosion" });
+        if (killed) {
+          extraKills++;
+          if (extraKills >= killCap) break;
         }
       }
-      if (killList.length){
-        killList.sort((a,b) => b-a);
-        let lastIdx = -1;
-        for (const idx of killList){
-          if (idx === lastIdx) continue;
-          Sound.play("kill");
-          killZombieAtIndex(idx, "explosion");
-          lastIdx = idx;
-        }
-      }
+
       if (hitSomething){
         spawnParticles(x,y,10,160);
         addRing(x,y,radius*0.35,0.3);
@@ -1320,10 +1366,16 @@
       }
     }
 
-    function applyDamageToZombie(index, dmg, { source="tap", hitSound=true, spawnFx=true, allowExplosion=true } = {}){
+    function applyDamageToZombie(index, dmg, { source="tap", hitSound=true, spawnFx=true, allowExplosion=true, cause="generic" } = {}){
       const z = zombies[index];
       if (!z) return false;
-      if (z.isCloaked) return false;
+      if (z.isCloaked) {
+        if (z.isBoss) {
+          if (source === "turret") return false;
+        } else {
+          return false;
+        }
+      }
       if (z.invulnTimer && z.invulnTimer > 0) return false;
       z.hp -= dmg;
       z.hitT = 0.12;
@@ -1333,7 +1385,8 @@
         addRing(z.x, z.y, 10, 0.25);
       }
       if (hitSound) Sound.play("hit");
-      if (Player.explosiveLevel > 0 && allowExplosion) triggerExplosion(z.x, z.y);
+      const doExplosion = Player.explosiveLevel > 0 && allowExplosion && cause !== "explosion";
+      if (doExplosion) triggerExplosion(z.x, z.y, index);
       if (z.hp <= 0) {
         Sound.play("kill");
         onZombieKilled(index);
@@ -1350,7 +1403,8 @@
           pointerState.set(pointerId, ps);
         }
         if (t - ps.lastShotAt < Player.tapCooldownMs) return;
-      if (Player.ammo <= 0){
+      const ammoFree = Wave.isBossWave;
+      if (!ammoFree && Player.ammo <= 0){
         if (t - State.lastAmmoWarnAt > 650){
           showToast("Out of ammo!");
           State.lastAmmoWarnAt = t;
@@ -1362,8 +1416,15 @@
       ps.x = x; ps.y = y;
       addReticle(x,y);
 
-      Player.ammo = Math.max(0, Player.ammo - 1);
+      if (!ammoFree) Player.ammo = Math.max(0, Player.ammo - 1);
       updateHUD();
+
+      const humanHit = findHumanAt(x, y);
+      if (humanHit !== -1){
+        spawnShot(State.w*0.5, State.h - 18, humans[humanHit].x, humans[humanHit].y, 0.08);
+        onHumanHit(humanHit);
+        return;
+      }
 
       // Find closest zombie within forgiving radius
       let hitIdx = -1;
@@ -1754,6 +1815,7 @@
     // ---------- Game flow
     function resetAll(){
       zombies.length = 0;
+      humans.length = 0;
       pointerState.clear();
       Player.hp = Player.maxHp;
       Player.score = 0;
@@ -1763,6 +1825,7 @@
       Player.ammoMax = 0;
       Player.turretLastShotAt = -1e9;
       Player.turretHeat = 0;
+      Player.turretWarmUntil = 0;
       Player.coins = Save.coinsBank;
       Player.shieldReady = Player.shieldLevel > 0;
       Player.lastDamageAt = nowMs();
@@ -1782,11 +1845,13 @@
       Wave.nextSpawnAt = 0;
       Wave.clearedAt = 0;
       Wave.isBossWave = false;
-      Wave.bossSpawned = false;
+      Wave.bossSpawned = 0;
+      Wave.bossPlan = [];
 
       State.shakeT = 0;
       State.shakeMag = 0;
       State.damageFlash = 0;
+      State.nextHumanAt = 0;
 
       // clear decals quickly
       decal.count = 0;
@@ -1822,19 +1887,39 @@
       Player.lastDamageAt = nowMs();
       State.invulnUntil = nowMs() + 1200;
       zombies.length = 0;
+      humans.length = 0;
       Wave.spawned = 0;
       Wave.active = true;
       Wave.isBossWave = (Wave.num % 5 === 0);
-      Wave.bossSpawned = false;
+      Wave.bossSpawned = 0;
+      Wave.bossPlan = [];
       Wave.mood = pickWaveMood(Wave.num);
       const w = Wave.num;
-      let toSpawn = Wave.isBossWave ? 1 : Math.floor(18 + w * 6.0 + Math.pow(w, 1.12) * 1.4);
+      const bossCount = Wave.isBossWave ? (Math.random() < 0.30 ? 2 : 1) : 0;
+      let toSpawn = Wave.isBossWave ? bossCount : Math.floor(18 + w * 6.0 + Math.pow(w, 1.12) * 1.4);
       if (Wave.mood === "SWARM") toSpawn = Math.floor(toSpawn * 1.45);
       if (Wave.mood === "RUNNERS") toSpawn = Math.floor(toSpawn * 1.15);
       if (Wave.mood === "MUTATION") toSpawn = Math.floor(toSpawn * 1.10);
       Wave.toSpawn = toSpawn;
+      if (Wave.isBossWave) {
+        const pool = ["blink", "cloak", "summoner", "dash"];
+        for (let i=0;i<bossCount;i++){
+          const pickIdx = pool.length > 0 ? randi(0, pool.length-1) : 0;
+          const type = pool.splice(pickIdx,1)[0] || "blink";
+          Wave.bossPlan.push({ typeChoice: type, hpScale: bossCount === 2 ? 0.7 : 1 });
+        }
+      }
       Wave.spawnEveryMs = Wave.isBossWave ? 900 : clamp(620 - w * 30, 140, 620);
       Wave.nextSpawnAt = nowMs() + 450;
+      if (Wave.isBossWave) {
+        Player.ammoMax = Infinity;
+        Player.ammo = Infinity;
+      } else {
+        Player.ammoMax = Math.max(1, Wave.toSpawn * 2);
+        Player.ammo = Player.ammoMax;
+      }
+      Player.turretWarmUntil = nowMs() + 1200;
+      State.nextHumanAt = nowMs() + 800;
       if (Player.shieldLevel > 0) Player.shieldReady = true;
       saveGame();
       continueOverlay.classList.add("hidden");
@@ -1867,19 +1952,37 @@
       Wave.num++;
       Wave.active = true;
       Wave.isBossWave = (Wave.num % 5 === 0);
-      Wave.bossSpawned = false;
+      Wave.bossSpawned = 0;
+      Wave.bossPlan = [];
       Wave.mood = pickWaveMood(Wave.num);
+      humans.length = 0;
 
       const w = Wave.num;
-      let toSpawn = Wave.isBossWave ? 1 : Math.floor(18 + w * 6.0 + Math.pow(w, 1.12) * 1.4);
+      const bossCount = Wave.isBossWave ? (Math.random() < 0.30 ? 2 : 1) : 0;
+      let toSpawn = Wave.isBossWave ? bossCount : Math.floor(18 + w * 6.0 + Math.pow(w, 1.12) * 1.4);
       if (Wave.mood === "SWARM") toSpawn = Math.floor(toSpawn * 1.45);
       if (Wave.mood === "RUNNERS") toSpawn = Math.floor(toSpawn * 1.15);
       if (Wave.mood === "MUTATION") toSpawn = Math.floor(toSpawn * 1.10);
       Wave.toSpawn = toSpawn;
       Wave.spawned = 0;
+      if (Wave.isBossWave) {
+        const pool = ["blink", "cloak", "summoner", "dash"];
+        for (let i=0;i<bossCount;i++){
+          const pickIdx = pool.length > 0 ? randi(0, pool.length-1) : 0;
+          const type = pool.splice(pickIdx,1)[0] || "blink";
+          Wave.bossPlan.push({ typeChoice: type, hpScale: bossCount === 2 ? 0.7 : 1 });
+        }
+      }
 
-      Player.ammoMax = Math.max(1, Wave.toSpawn * 2);
-      Player.ammo = Player.ammoMax;
+      if (Wave.isBossWave) {
+        Player.ammoMax = Infinity;
+        Player.ammo = Infinity;
+      } else {
+        Player.ammoMax = Math.max(1, Wave.toSpawn * 2);
+        Player.ammo = Player.ammoMax;
+      }
+      Player.turretWarmUntil = nowMs() + 1200;
+      State.nextHumanAt = nowMs() + 800;
 
       // Faster spawn at higher waves
       Wave.spawnEveryMs = Wave.isBossWave ? 900 : clamp(620 - w * 30, 140, 620);
@@ -1936,11 +2039,11 @@
 
       dmgDesc.textContent = `+1 tap dmg (Lv ${Player.dmgLevel})`;
       rateDesc.textContent = `Shoot ${(1000/Player.tapCooldownMs).toFixed(1)}/s → ${(1000/Math.max(80, Player.tapCooldownMs*0.9)).toFixed(1)}/s`;
-      const nextTurretCd = clamp(Player.turretCooldownMs * 0.92, 240, 900);
-      turretDesc.textContent = Player.turretLevel === 0 ? "Install an auto turret" : `Fire ${(1000/Player.turretCooldownMs).toFixed(1)}/s → ${(1000/nextTurretCd).toFixed(1)}/s`;
+      const nextTurretCd = clamp(Player.turretCooldownMs * 0.93, 1400, 2200);
+      turretDesc.textContent = Player.turretLevel === 0 ? "Install an auto turret (slow fire)" : `Fire ${(1000/Player.turretCooldownMs).toFixed(2)}/s → ${(1000/nextTurretCd).toFixed(2)}/s`;
       const msNext = Player.multishotLevel === 0 ? "+1 target" : Player.multishotLevel === 1 ? "+2 targets" : "maxed";
       multiDesc.textContent = `Hit ${Player.multishotLevel === 0 ? "1" : Player.multishotLevel + 1} target(s) → ${msNext}`;
-      const explRadius = 60 + Player.explosiveLevel * 12;
+      const explRadius = Player.explosiveLevel === 0 ? 0 : Player.explosiveLevel === 1 ? 45 : 60;
       explosiveDesc.textContent = Player.explosiveLevel >= 2 ? `Explodes nearby 1-hp foes (radius ${explRadius}) (maxed)` : `Splash pops 1-hp in r${explRadius}`;
       shieldDesc.textContent = Player.shieldLevel ? "Shield charged (blocks one leak)" : "Absorb one leak";
 
@@ -1965,6 +2068,25 @@
       const total = runnerW + normalW;
       const r = Math.random() * total;
       return (r < runnerW) ? "runner" : "normal";
+    }
+
+    function spawnHuman(){
+      const margin = 22;
+      const x = rand(margin, State.w - margin);
+      const safeTop = State.playTop + 12;
+      const y = rand(safeTop, safeTop + 30);
+      const h = {
+        x, y,
+        baseX: x,
+        vy: rand(24, 38),
+        wiggleAmp: rand(10, 28),
+        wiggleFreq: rand(0.8, 1.5),
+        wigglePhase: rand(0, Math.PI*2),
+        t: 0,
+        r: 16,
+        flip: Math.random() < 0.5,
+      };
+      humans.push(h);
     }
 
     function spawnZombie(){
@@ -2094,12 +2216,24 @@
       zombies.push(z);
     }
 
-    function spawnBoss(){
-      const bossMaxHp = Math.floor(35 + Wave.num * 12);
-      const baseSpeed = 30 + Wave.num * 0.5;
+    function maybeSpawnHuman(){
+      const t = nowMs();
+      if (t < State.nextHumanAt) return;
+      State.nextHumanAt = t + rand(900, 1700);
+      if (humans.length >= 3) return;
+      const chance = clamp(0.04 + Wave.num * 0.0025, 0.04, 0.08);
+      if (Math.random() < chance) spawnHuman();
+    }
+
+    function spawnBoss({ hpScale=1, typeChoice=null } = {}){
+      const baseHp = Math.floor(18 + Wave.num * 2.2);
+      const bossMaxHp = Math.floor(baseHp * hpScale);
+      const baseSpeed = 32 + Wave.num * 0.35;
       const margin = 32;
       const x = rand(margin, State.w - margin);
       const y = rand(State.playTop + 12, State.playTop + 38);
+      const mutationPool = ["blink", "cloak", "summoner", "dash"];
+      const pick = typeChoice || mutationPool[randi(0, mutationPool.length-1)];
       const z = {
         type: "boss",
         rank: "boss",
@@ -2108,7 +2242,7 @@
         x, y,
         x0: x,
         vy: baseSpeed,
-        r: 30,
+        r: 34,
         maxHp: bossMaxHp,
         hp: bossMaxHp,
         coin: 30 + Math.floor(Wave.num * 5),
@@ -2117,13 +2251,22 @@
         bob: 0,
         step: rand(0, Math.PI*2),
         hitT: 0,
-        wiggleAmp: 10,
-        wiggleFreq: 0.35,
+        wiggleAmp: 12,
+        wiggleFreq: 0.45,
         wigglePhase: rand(0, Math.PI*2),
         frame: 0,
         frameT: 0,
-        mutation: "none",
+        mutation: pick,
         isCloaked: false,
+        nextSummon: rand(2.6, 3.6),
+        nextBlink: rand(1.4, 2.2),
+        nextDash: rand(1.3, 2.1),
+        cloakTimer: 0,
+        nextCloak: rand(2.0, 3.0),
+        dashTime: 0,
+        dashMult: 1,
+        invulnTimer: 0,
+        blinkFlash: 0.35,
       };
       zombies.push(z);
     }
@@ -2131,13 +2274,14 @@
     // ---------- Turret logic
     function turretDamage(){
       if (Player.turretLevel <= 0) return 0;
-      // Turret damage scales gently (slightly toned down)
-      return 1 + Math.floor(Player.turretLevel * 0.80);
+      // Assist only: tiny chip
+      return Math.min(2, 1 + Math.floor(Math.max(0, Player.turretLevel-3) * 0.2));
     }
 
     function turretTryShoot(){
       if (Player.turretLevel <= 0) return;
       const t = nowMs();
+      if (t < Player.turretWarmUntil) return;
       const heatMult = 1 + Player.turretHeat * 1.8;
       const cd = Player.turretCooldownMs * heatMult;
       if (t - Player.turretLastShotAt < cd) return;
@@ -2189,7 +2333,8 @@
       scoreLabel.textContent = fmt(Player.score);
       comboValue.textContent = Combo.value > 0 && Combo.timer > 0 ? `x${Combo.value}` : "—";
       comboValue.style.opacity = Combo.value > 0 && Combo.timer > 0 ? 1 : 0.6;
-      ammoLabel.textContent = `${Math.max(0, Math.floor(Player.ammo))}/${Math.max(0, Math.floor(Player.ammoMax))}`;
+      if (Wave.isBossWave) ammoLabel.textContent = `∞`;
+      else ammoLabel.textContent = `${Math.max(0, Math.floor(Player.ammo))}/${Math.max(0, Math.floor(Player.ammoMax))}`;
       const soundOn = Sound.getEnabled();
       soundBtn.classList.toggle("toggleOn", soundOn);
       soundBtn.textContent = soundOn ? "🔊" : "🔇";
@@ -2208,10 +2353,13 @@
     }
 
     function findBoss(){
+      let best = null;
       for (let i=0;i<zombies.length;i++){
-        if (zombies[i].isBoss) return zombies[i];
+        const z = zombies[i];
+        if (!z.isBoss) continue;
+        if (!best || z.hp > best.hp) best = z;
       }
-      return null;
+      return best;
     }
 
     function updateBossUI(){
@@ -2255,6 +2403,16 @@
       ctx.save();
       ctx.translate(x, y);
 
+      if (z.isBoss) {
+        const hue = z.mutation === "blink" ? "rgba(168,85,247,0.55)" : z.mutation === "dash" ? "rgba(251,146,60,0.55)" : z.mutation === "summoner" ? "rgba(74,222,128,0.55)" : "rgba(125,211,252,0.45)";
+        ctx.globalAlpha = 0.65;
+        ctx.fillStyle = hue;
+        ctx.beginPath();
+        ctx.arc(0, 0, r*1.6, 0, Math.PI*2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
       // mutation glows / trails
       if (z.mutation === "dash" && z.dashTime > 0) {
         ctx.globalAlpha = 0.45;
@@ -2264,6 +2422,14 @@
         ctx.lineTo(-r*1.6, r*0.05);
         ctx.lineTo(-r*0.8, -r*0.25);
         ctx.closePath();
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+      if (z.mutation === "summoner") {
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = "rgba(34,197,94,0.55)";
+        ctx.beginPath();
+        ctx.arc(0, 0, r*1.4, 0, Math.PI*2);
         ctx.fill();
         ctx.globalAlpha = 1;
       }
@@ -2278,7 +2444,7 @@
         ctx.globalAlpha = 1;
       }
 
-      const baseAlpha = z.isCloaked ? 0.18 : 1;
+      const baseAlpha = z.isCloaked ? (z.isBoss ? 0.25 : 0.18) : 1;
 
       // shadow
       ctx.fillStyle = "rgba(0,0,0,.35)";
@@ -2395,6 +2561,16 @@
         ctx.strokeRect(px, py, bw, bh);
       }
 
+      if (z.mutation !== "none" && !z.isCloaked) {
+        const label = z.mutation === "blink" ? "Blink" : z.mutation === "dash" ? "Dash" : z.mutation === "summoner" ? "Summon" : "Cloak";
+        ctx.globalAlpha = 0.82;
+        ctx.fillStyle = z.mutation === "blink" ? "#a855f7" : z.mutation === "dash" ? "#fb923c" : z.mutation === "summoner" ? "#4ade80" : "#22d3ee";
+        ctx.font = "700 11px ui-sans-serif, system-ui";
+        ctx.textAlign = "center";
+        ctx.fillText(label, 0, -r*1.6);
+        ctx.globalAlpha = 1;
+      }
+
       ctx.restore();
     }
 
@@ -2422,6 +2598,16 @@
       const hitS = (z.hitT > 0) ? 1.08 : 1.0;
       ctx.scale(hitS, hitS);
 
+      if (z.isBoss) {
+        const hue = z.mutation === "blink" ? "rgba(168,85,247,0.55)" : z.mutation === "dash" ? "rgba(251,146,60,0.55)" : z.mutation === "summoner" ? "rgba(74,222,128,0.55)" : "rgba(125,211,252,0.45)";
+        ctx.globalAlpha = 0.65;
+        ctx.fillStyle = hue;
+        ctx.beginPath();
+        ctx.arc(0, 0, z.r*1.7, 0, Math.PI*2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
       if (z.mutation === "dash" && z.dashTime > 0) {
         ctx.globalAlpha = 0.45;
         ctx.fillStyle = "rgba(248,113,113,0.65)";
@@ -2429,6 +2615,14 @@
         ctx.moveTo(-z.r*0.8, z.r*0.35);
         ctx.lineTo(-z.r*1.6, z.r*0.05);
         ctx.lineTo(-z.r*0.8, -z.r*0.25);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+      if (z.mutation === "summoner") {
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = "rgba(34,197,94,0.55)";
+        ctx.beginPath();
+        ctx.arc(0, 0, z.r*1.5, 0, Math.PI*2);
         ctx.fill();
         ctx.globalAlpha = 1;
       }
@@ -2442,7 +2636,7 @@
         ctx.globalAlpha = 1;
       }
 
-      const baseAlpha = z.isCloaked ? 0.18 : 1;
+      const baseAlpha = z.isCloaked ? (z.isBoss ? 0.25 : 0.18) : 1;
 
       // shadow
       ctx.fillStyle = "rgba(0,0,0,.35)";
@@ -2515,16 +2709,52 @@
       }
 
       if (z.mutation !== "none" && !z.isCloaked) {
+        const label = z.mutation === "blink" ? "Blink" : z.mutation === "dash" ? "Dash" : z.mutation === "summoner" ? "Summon" : "Cloak";
         ctx.globalAlpha = 0.82;
-        ctx.fillStyle = z.mutation === "blink" ? "#a855f7" : z.mutation === "dash" ? "#fb923c" : "#22d3ee";
+        ctx.fillStyle = z.mutation === "blink" ? "#a855f7" : z.mutation === "dash" ? "#fb923c" : z.mutation === "summoner" ? "#4ade80" : "#22d3ee";
         ctx.font = "700 11px ui-sans-serif, system-ui";
         ctx.textAlign = "center";
-        ctx.fillText("Mutant!", 0, -z.r*1.6);
+        ctx.fillText(label, 0, -z.r*1.6);
         ctx.globalAlpha = 1;
       }
 
       ctx.restore();
       return true;
+    }
+
+    function drawHuman(h){
+      const x = h.x;
+      const y = h.y;
+      const r = h.r;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(h.flip ? -1 : 1, 1);
+      if (Assets.humanSpriteOk && Assets.humanSprite){
+        const size = r * 2.2;
+        ctx.drawImage(Assets.humanSprite, -size/2, -size/2, size, size);
+      } else {
+        // simple bright stick figure
+        ctx.strokeStyle = "rgba(248,250,252,0.9)";
+        ctx.fillStyle = "rgba(244,244,245,0.85)";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(0, -r*0.45, r*0.42, 0, Math.PI*2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(0, -r*0.05);
+        ctx.lineTo(0, r*0.9);
+        ctx.moveTo(0, r*0.2);
+        ctx.lineTo(-r*0.7, r*0.55);
+        ctx.moveTo(0, r*0.2);
+        ctx.lineTo(r*0.7, r*0.55);
+        ctx.moveTo(0, r*0.9);
+        ctx.lineTo(-r*0.5, r*1.6);
+        ctx.moveTo(0, r*0.9);
+        ctx.lineTo(r*0.5, r*1.6);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
 
     function drawTurret(){
@@ -2604,16 +2834,21 @@
           Wave.nextSpawnAt = t + 120;
         }
         if (Wave.active && Wave.isBossWave) {
-          if (!Wave.bossSpawned && t >= Wave.nextSpawnAt) {
-            spawnBoss();
+          if (Wave.spawned < Wave.toSpawn && t >= Wave.nextSpawnAt) {
+            const plan = Wave.bossPlan[Wave.spawned] || { hpScale: Wave.toSpawn === 2 ? 0.7 : 1, typeChoice: null };
+            spawnBoss(plan);
             Wave.spawned++;
-            Wave.bossSpawned = true;
+            Wave.bossSpawned = Wave.spawned;
             Wave.nextSpawnAt = t + Wave.spawnEveryMs;
+            maybeSpawnHuman();
+          } else {
+            maybeSpawnHuman();
           }
         } else if (Wave.active && Wave.spawned < Wave.toSpawn && t >= Wave.nextSpawnAt) {
           if (zombies.length >= MAX_Z) {
             Wave.nextSpawnAt = t + 160;
           } else {
+            maybeSpawnHuman();
             spawnZombie();
             Wave.spawned++;
             if (Wave.mood === "SWARM") {
@@ -2627,10 +2862,26 @@
             }
             Wave.nextSpawnAt = t + Wave.spawnEveryMs * rand(0.72, 1.10);
           }
+        } else {
+          maybeSpawnHuman();
         }
 
       // Turret
       turretTryShoot();
+
+      // Humans (hazard)
+      for (let i=humans.length-1; i>=0; i--){
+        const h = humans[i];
+        h.t += dt;
+        const wiggle = Math.sin(h.t * h.wiggleFreq + h.wigglePhase) * h.wiggleAmp;
+        const margin = 18;
+        h.x = clamp(h.baseX + wiggle, margin, State.w - margin);
+        h.y += h.vy * dt;
+        if (h.y - h.r > State.h) {
+          humans[i] = humans[humans.length - 1];
+          humans.pop();
+        }
+      }
 
       // Update zombies
       for (let i=zombies.length-1; i>=0; i--){
@@ -2645,51 +2896,109 @@
         z.bob = Math.sin(z.t*8.2) * bobAmp;
 
         // mutation behaviors
-        if (z.mutation === "blink") {
-          z.nextBlink = z.nextBlink ?? rand(1.2, 2.0);
-          z.nextBlink -= dt;
-          if (z.nextBlink <= 0) {
-            const shift = (Math.random() < 0.5 ? -1 : 1) * rand(40, 110);
-            const marginX = 18;
-            const newX = clamp(z.x + shift, marginX, State.w - marginX);
-            if (Math.abs(newX - z.x) > 2) {
-              addRing(newX, z.y, 14, 0.3);
-              spawnParticles(newX, z.y, 6, 140);
+        if (z.isBoss) {
+          if (z.mutation === "blink") {
+            z.nextBlink = (z.nextBlink ?? rand(1.4, 2.2)) - dt;
+            if (z.nextBlink <= 0) {
+              const shift = (Math.random() < 0.5 ? -1 : 1) * rand(60, 140);
+              const marginX = 22;
+              const newX = clamp(z.x + shift, marginX, State.w - marginX);
+              if (Math.abs(newX - z.x) > 2) {
+                addRing(newX, z.y, 16, 0.35);
+                spawnParticles(newX, z.y, 8, 150);
+              }
+              z.x = newX;
+              z.x0 = newX;
+              z.invulnTimer = Math.max(z.invulnTimer, 0.18);
+              z.blinkFlash = 0.35;
+              z.nextBlink = rand(1.4, 2.2);
             }
-            z.x = newX;
-            z.x0 = newX;
-            z.invulnTimer = Math.max(z.invulnTimer, 0.18);
-            z.blinkFlash = 0.25;
-            z.nextBlink = rand(1.2, 2.0);
+          } else if (z.mutation === "cloak") {
+            if (z.isCloaked) {
+              z.cloakTimer -= dt;
+              if (z.cloakTimer <= 0) {
+                z.isCloaked = false;
+                z.nextCloak = rand(2.0, 3.0);
+              }
+            } else {
+              z.nextCloak = (z.nextCloak ?? rand(2.0, 3.0)) - dt;
+              if (z.nextCloak <= 0) {
+                z.isCloaked = true;
+                z.cloakTimer = 0.7;
+              }
+            }
+          } else if (z.mutation === "dash") {
+            if (z.dashTime > 0) {
+              z.dashTime -= dt;
+              if (z.dashTime <= 0) {
+                z.dashMult = 1;
+                z.nextDash = rand(1.6, 2.3);
+              }
+            } else {
+              z.nextDash = (z.nextDash ?? rand(1.6, 2.3)) - dt;
+              if (z.nextDash <= 0) {
+                z.dashTime = 0.25;
+                z.dashMult = rand(1.8, 2.3);
+                z.nextDash = rand(1.8, 2.5) + z.dashTime;
+              }
+            }
+          } else if (z.mutation === "summoner") {
+            z.nextSummon = (z.nextSummon ?? rand(3.2, 4.2)) - dt;
+            if (z.nextSummon <= 0 && zombies.length < MAX_Z) {
+              const minions = randi(2, 4);
+              for (let n=0;n<minions && zombies.length < MAX_Z;n++){
+                spawnZombie();
+              }
+              z.nextSummon = rand(3.2, 4.2);
+            }
           }
-        } else if (z.mutation === "cloak") {
-          if (z.isCloaked) {
-            z.cloakTimer -= dt;
-            if (z.cloakTimer <= 0) {
-              z.isCloaked = false;
-              z.nextCloak = rand(1.8, 2.6);
+        } else {
+          if (z.mutation === "blink") {
+            z.nextBlink = z.nextBlink ?? rand(1.2, 2.0);
+            z.nextBlink -= dt;
+            if (z.nextBlink <= 0) {
+              const shift = (Math.random() < 0.5 ? -1 : 1) * rand(40, 110);
+              const marginX = 18;
+              const newX = clamp(z.x + shift, marginX, State.w - marginX);
+              if (Math.abs(newX - z.x) > 2) {
+                addRing(newX, z.y, 14, 0.3);
+                spawnParticles(newX, z.y, 6, 140);
+              }
+              z.x = newX;
+              z.x0 = newX;
+              z.invulnTimer = Math.max(z.invulnTimer, 0.18);
+              z.blinkFlash = 0.25;
+              z.nextBlink = rand(1.2, 2.0);
             }
-          } else {
-            z.nextCloak = (z.nextCloak ?? rand(1.8, 2.6)) - dt;
-            if (z.nextCloak <= 0) {
-              z.isCloaked = true;
-              z.cloakTimer = rand(0.6, 0.9);
-              z.invulnTimer = Math.max(z.invulnTimer, 0.05);
+          } else if (z.mutation === "cloak") {
+            if (z.isCloaked) {
+              z.cloakTimer -= dt;
+              if (z.cloakTimer <= 0) {
+                z.isCloaked = false;
+                z.nextCloak = rand(1.8, 2.6);
+              }
+            } else {
+              z.nextCloak = (z.nextCloak ?? rand(1.8, 2.6)) - dt;
+              if (z.nextCloak <= 0) {
+                z.isCloaked = true;
+                z.cloakTimer = rand(0.6, 0.9);
+                z.invulnTimer = Math.max(z.invulnTimer, 0.05);
+              }
             }
-          }
-        } else if (z.mutation === "dash") {
-          if (z.dashTime > 0) {
-            z.dashTime -= dt;
-            if (z.dashTime <= 0) {
-              z.dashMult = 1;
-              z.nextDash = rand(1.6, 2.4);
-            }
-          } else {
-            z.nextDash = (z.nextDash ?? rand(1.6, 2.4)) - dt;
-            if (z.nextDash <= 0) {
-              z.dashTime = rand(0.22, 0.27);
-              z.dashMult = rand(2.2, 2.8);
-              z.nextDash = rand(1.6, 2.4) + z.dashTime;
+          } else if (z.mutation === "dash") {
+            if (z.dashTime > 0) {
+              z.dashTime -= dt;
+              if (z.dashTime <= 0) {
+                z.dashMult = 1;
+                z.nextDash = rand(1.6, 2.4);
+              }
+            } else {
+              z.nextDash = (z.nextDash ?? rand(1.6, 2.4)) - dt;
+              if (z.nextDash <= 0) {
+                z.dashTime = rand(0.22, 0.27);
+                z.dashMult = rand(2.2, 2.8);
+                z.nextDash = rand(1.6, 2.4) + z.dashTime;
+              }
             }
           }
         }
@@ -2846,6 +3155,11 @@
 
       // Turret
       drawTurret();
+
+      // Humans
+      for (let i=0;i<humans.length;i++){
+        drawHuman(humans[i]);
+      }
 
       // Zombies
       for (let i=0;i<zombies.length;i++){
